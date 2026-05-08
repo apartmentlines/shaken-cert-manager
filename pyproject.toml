@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shaken-cert-manager"
+version = "0.1.0"
+description = "SHAKEN certificate issuance and renewal lifecycle manager"
+requires-python = ">=3.10"
+dependencies = [
+  "cryptography>=41",
+  "PyYAML>=6.0",
+  "stir-shaken-toolkit",
+]
+
+[project.scripts]
+shaken-cert-manager = "shaken_cert_manager.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,150 @@
+"""Filesystem helpers for SHAKEN certificate management."""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+from types import TracebackType
+from typing import Any
+
+from shaken_cert_manager.errors import LockError
+
+
+class FileLock:
+    """Exclusive file lock for mutating manager commands."""
+
+    def __init__(self, path: Path, wait: bool = False) -> None:
+        self.path = path
+        self.wait = wait
+        self.file_descriptor: int | None = None
+
+    def __enter__(self) -> FileLock:
+        """Acquire the lock.
+
+        :return: This lock.
+        :rtype: FileLock
+        """
+
+        self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        flags = fcntl.LOCK_EX if self.wait else fcntl.LOCK_EX | fcntl.LOCK_NB
+        try:
+            fcntl.flock(descriptor, flags)
+        except BlockingIOError as exc:
+            os.close(descriptor)
+            raise LockError(
+                f"Another shaken-cert-manager process holds {self.path}"
+            ) from exc
+        self.file_descriptor = descriptor
+        os.ftruncate(descriptor, 0)
+        os.write(
+            descriptor, f"pid={os.getpid()} started_at={now_utc()}\n".encode("utf-8")
+        )
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Release the lock.
+
+        :param exc_type: Exception type.
+        :type exc_type: type[BaseException] | None
+        :param exc_value: Exception value.
+        :type exc_value: BaseException | None
+        :param traceback: Traceback.
+        :type traceback: TracebackType | None
+        :return: None.
+        :rtype: None
+        """
+
+        if self.file_descriptor is not None:
+            fcntl.flock(self.file_descriptor, fcntl.LOCK_UN)
+            os.close(self.file_descriptor)
+            self.file_descriptor = None
+
+
+def now_utc() -> str:
+    """Return a UTC timestamp.
+
+    :return: Timestamp.
+    :rtype: str
+    """
+
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
+    """Write text atomically.
+
+    :param path: Destination path.
+    :type path: Path
+    :param content: Text content.
+    :type content: str
+    :param mode: File mode.
+    :type mode: int
+    :return: None.
+    :rtype: None
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_text(content)
+    os.chmod(temporary_path, mode)
+    os.replace(temporary_path, path)
+
+
+def atomic_write_bytes(path: Path, content: bytes, mode: int = 0o600) -> None:
+    """Write bytes atomically.
+
+    :param path: Destination path.
+    :type path: Path
+    :param content: Bytes content.
+    :type content: bytes
+    :param mode: File mode.
+    :type mode: int
+    :return: None.
+    :rtype: None
+    """
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_name(f".{path.name}.tmp")
+    temporary_path.write_bytes(content)
+    os.chmod(temporary_path, mode)
+    os.replace(temporary_path, path)
+
+
+def atomic_write_json(path: Path, content: dict[str, Any], mode: int = 0o600) -> None:
+    """Write JSON atomically.
+
+    :param path: Destination path.
+    :type path: Path
+    :param content: JSON content.
+    :type content: dict[str, Any]
+    :param mode: File mode.
+    :type mode: int
+    :return: None.
+    :rtype: None
+    """
+
+    atomic_write_text(path, json.dumps(content, indent=2, sort_keys=True) + "\n", mode)
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    """Read a JSON object from disk.
+
+    :param path: JSON path.
+    :type path: Path
+    :return: JSON object.
+    :rtype: dict[str, Any]
+    """
+
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict):
+        raise ValueError(f"JSON path is not an object: {path}")
+    return value

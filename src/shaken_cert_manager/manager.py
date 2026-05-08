@@ -1,0 +1,802 @@
+"""Core SHAKEN certificate issuance and lifecycle manager."""
+
+from __future__ import annotations
+
+import json
+import os
+import secrets
+import shutil
+import subprocess
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from stir_shaken_acme import (
+    IssuanceValidationError,
+    ShakenCertificateManager,
+    ShakenCertificatePolicy,
+    ShakenSubject,
+    StipaSettings,
+    StirShakenIssuanceResult,
+    TnAuthList,
+)
+from stir_shaken_acme.errors import ShakenValidationError
+from stir_shaken_toolkit.providers.peeringhub import PeeringhubIssuer, PeeringhubProfile
+
+from shaken_cert_manager.config import ManagerConfig
+from shaken_cert_manager.errors import ManagerError, ValidationError
+from shaken_cert_manager.files import (
+    FileLock,
+    atomic_write_bytes,
+    atomic_write_json,
+    atomic_write_text,
+    now_utc,
+    read_json,
+)
+from shaken_cert_manager.status import (
+    CRITICAL,
+    OK,
+    StatusChecker,
+    StatusResult,
+    WARNING,
+)
+
+
+class ShakenCertManager:
+    """Orchestrate SHAKEN certificate issue, renewal, status, and cleanup."""
+
+    def __init__(self, config: ManagerConfig) -> None:
+        self.config = config
+        self.certificates = ShakenCertificateManager()
+
+    def status(self, nagios: bool = False, json_output: bool = False) -> int:
+        """Print manager status.
+
+        :param nagios: Print Nagios output.
+        :type nagios: bool
+        :param json_output: Print JSON output.
+        :type json_output: bool
+        :return: Exit code.
+        :rtype: int
+        """
+
+        result = StatusChecker(self.config).check()
+        if json_output:
+            print(
+                json.dumps(
+                    {
+                        "code": result.code,
+                        "summary": result.summary,
+                        "fields": result.fields,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        elif nagios:
+            print(result.nagios_line())
+        else:
+            print(result.summary)
+            for key, value in result.fields.items():
+                print(f"{key}: {value}")
+        return result.code
+
+    def issue_initial(self, wait_lock: bool = False) -> int:
+        """Issue an initial certificate when none is active.
+
+        :param wait_lock: Wait for manager lock.
+        :type wait_lock: bool
+        :return: Exit code.
+        :rtype: int
+        """
+
+        with FileLock(self.config.lock_path, wait_lock):
+            if StatusChecker(self.config).check().code in {OK, WARNING}:
+                self.write_last_attempt(
+                    "issue-initial",
+                    "no_renewal_needed",
+                    "active certificate already exists",
+                )
+                return 0
+            self.issue_certificate("issue-initial", force=True)
+            return 0
+
+    def renew(self, wait_lock: bool = False) -> int:
+        """Renew only when policy requires it.
+
+        :param wait_lock: Wait for manager lock.
+        :type wait_lock: bool
+        :return: Exit code.
+        :rtype: int
+        """
+
+        with FileLock(self.config.lock_path, wait_lock):
+            if not self.renewal_required():
+                self.write_last_attempt(
+                    "renew",
+                    "no_renewal_needed",
+                    "active certificate outside renewal window",
+                )
+                return 0
+            self.issue_certificate("renew", force=False)
+            return 0
+
+    def force_renew(
+        self, wait_lock: bool = False, allow_production: bool = False
+    ) -> int:
+        """Force a certificate renewal.
+
+        :param wait_lock: Wait for manager lock.
+        :type wait_lock: bool
+        :param allow_production: Allow production force-renew.
+        :type allow_production: bool
+        :return: Exit code.
+        :rtype: int
+        """
+
+        if self.config.environment == "production" and not (
+            allow_production or self.config.allow_production_force_renew
+        ):
+            raise ManagerError(
+                "force-renew in production requires --allow-production-force-renew or config allowance"
+            )
+        with FileLock(self.config.lock_path, wait_lock):
+            self.issue_certificate("force-renew", force=True)
+            return 0
+
+    def account_status(self, wait_lock: bool = False) -> int:
+        """Verify ACME account status without issuing a certificate.
+
+        :param wait_lock: Wait for manager lock.
+        :type wait_lock: bool
+        :return: Exit code.
+        :rtype: int
+        """
+
+        with FileLock(self.config.lock_path, wait_lock):
+            PeeringhubIssuer.for_account_status(
+                environment=self.config.environment,
+                acme_base_url=self.config.acme_url(),
+                account_key_path=self.config.acme_account_key_path,
+                account_state_path=self.config.acme_account_state_path,
+                acme_kid=self.config.acme_kid,
+                timeout_seconds=self.config.acme_timeout_seconds,
+                bad_nonce_retries=self.config.acme_bad_nonce_retries,
+            ).prepare_account()
+            return 0
+
+    def cleanup(self, wait_lock: bool = False) -> int:
+        """Remove expired inactive archives and old failed archives.
+
+        :param wait_lock: Wait for manager lock.
+        :type wait_lock: bool
+        :return: Exit code.
+        :rtype: int
+        """
+
+        with FileLock(self.config.lock_path, wait_lock):
+            active_generation_id = self.active_generation_id()
+            cutoff = datetime.now(UTC) - timedelta(
+                days=self.config.retention_days_after_expiry
+            )
+            for manifest_path in self.config.archive_dir.glob("*/manifest.json"):
+                manifest = read_json(manifest_path)
+                generation_id = str(manifest.get("generation_id", ""))
+                if generation_id == active_generation_id:
+                    continue
+                not_after = parse_timestamp(str(manifest.get("not_after", "")))
+                if not_after is None or not_after > cutoff:
+                    continue
+                shutil.rmtree(manifest_path.parent)
+            self.prune_failed_archives()
+            self.write_last_attempt("cleanup", "success", "cleanup complete")
+            return 0
+
+    def renewal_required(self) -> bool:
+        """Return whether a renewal is required.
+
+        :return: Whether renewal is required.
+        :rtype: bool
+        """
+
+        result = StatusChecker(self.config).check()
+        if result.code == CRITICAL:
+            return True
+        if result.code == WARNING:
+            days_remaining = result.fields.get("days_remaining")
+            return (
+                isinstance(days_remaining, int)
+                and days_remaining <= self.config.renew_before_days
+            )
+        return False
+
+    def issue_certificate(self, command: str, force: bool) -> None:
+        """Perform a full transactional certificate issuance.
+
+        :param command: Command name.
+        :type command: str
+        :param force: Whether issuance is forced.
+        :type force: bool
+        :return: None.
+        :rtype: None
+        """
+
+        if not self.config.enabled:
+            self.write_last_attempt(
+                command, "no_renewal_needed", "SHAKEN certificate management disabled"
+            )
+            return
+        started_at = now_utc()
+        generation_id = self.new_generation_id()
+        transaction_dir = self.config.work_dir / generation_id
+        transaction_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+        try:
+            self.preflight()
+            issuer = self.prepare_peeringhub_issuer(generation_id)
+            result = issuer.issue(
+                self.config.spc,
+                not_before=self.config.not_before,
+                not_after=self.config.not_after,
+            )
+            csr_pem_path = transaction_dir / "csr.pem"
+            csr_der_path = transaction_dir / "csr.der"
+            atomic_write_bytes(csr_pem_path, result.csr_pem, 0o600)
+            atomic_write_bytes(csr_der_path, result.csr_der, 0o600)
+            archive_dir = self.config.archive_dir / generation_id
+            archive_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+            leaf_archive_path = archive_dir / "leaf.pem"
+            chain_archive_path = archive_dir / "certificate-chain.pem"
+            shutil.copy2(csr_pem_path, archive_dir / "csr.pem")
+            shutil.copy2(csr_der_path, archive_dir / "csr.der")
+            atomic_write_text(chain_archive_path, result.chain_pem, 0o600)
+            atomic_write_text(leaf_archive_path, result.leaf_pem, 0o600)
+            atomic_write_json(archive_dir / "order.json", result.valid_order, 0o600)
+            atomic_write_json(
+                archive_dir / "authorization.json", result.authorization, 0o600
+            )
+            atomic_write_json(
+                archive_dir / "challenge.json", result.submitted_challenge, 0o600
+            )
+            if result.certificate_details is None:
+                raise ValidationError("issued certificate details are missing")
+            manifest = self.build_manifest(
+                generation_id=generation_id,
+                cert_details=result.certificate_details.as_dict(),
+                tn_auth_list_value=result.tn_auth_list_value,
+                installed_key_path=self.config.acme_account_key_path,
+                chain_archive_path=chain_archive_path,
+                leaf_archive_path=leaf_archive_path,
+                order_url=result.order_url,
+                authorization_url=result.authorization_url,
+                finalize_url=result.finalize_url,
+                certificate_url=result.certificate_url,
+                stipa_token=result.stipa_token,
+                account_state=result.account_state,
+                deploy_hook_status="pending",
+            )
+            atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
+            deploy_hook_status = self.run_deploy_hook(archive_dir / "manifest.json")
+            manifest["deploy_hook_status"] = deploy_hook_status
+            manifest["deployed_at"] = now_utc()
+            atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
+            atomic_write_json(self.config.active_manifest_path, manifest, 0o600)
+            shutil.rmtree(transaction_dir)
+            self.write_last_attempt(
+                command,
+                "success",
+                "certificate issued",
+                started_at=started_at,
+                generation_id=generation_id,
+            )
+        except IssuanceValidationError as exc:
+            self.archive_validation_failure(generation_id, exc.partial_result)
+            self.record_failure(
+                command, generation_id, transaction_dir, started_at, exc
+            )
+            raise
+        except Exception as exc:
+            self.record_failure(
+                command, generation_id, transaction_dir, started_at, exc
+            )
+            raise
+
+    def preflight(self) -> None:
+        """Validate local prerequisites before network issuance.
+
+        :return: None.
+        :rtype: None
+        """
+
+        required_dirs = [
+            self.config.state_dir,
+            self.config.work_dir,
+            self.config.archive_dir,
+            self.config.failed_dir,
+            self.config.account_dir,
+        ]
+        for directory in required_dirs:
+            directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+            if directory.stat().st_mode & 0o077:
+                raise ValidationError(f"state directory must be root-only: {directory}")
+        if not self.config.acme_account_key_path.exists():
+            raise ValidationError(
+                f"ACME account private key is missing: {self.config.acme_account_key_path}"
+            )
+
+    def run_deploy_hook(self, manifest_path: Path) -> str:
+        """Run the configured deploy hook for an archived generation.
+
+        :param manifest_path: Archived manifest path.
+        :type manifest_path: Path
+        :return: Hook status string.
+        :rtype: str
+        :raises ManagerError: If the deploy hook fails or times out.
+        """
+
+        if not self.config.deploy_hook:
+            return "disabled"
+        manifest = read_json(manifest_path)
+        environment = self.deploy_hook_environment(manifest_path, manifest)
+        try:
+            result = subprocess.run(
+                self.config.deploy_hook,
+                check=False,
+                env=environment,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=self.config.deploy_hook_timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ManagerError(
+                f"deploy hook timed out after {self.config.deploy_hook_timeout_seconds} seconds"
+            ) from exc
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            stdout = result.stdout.strip()
+            detail = stderr or stdout or f"exit code {result.returncode}"
+            raise ManagerError(f"deploy hook failed: {detail}")
+        return "success"
+
+    def deploy_hook_environment(
+        self, manifest_path: Path, manifest: dict[str, Any]
+    ) -> dict[str, str]:
+        """Build deploy hook environment values.
+
+        :param manifest_path: Archived manifest path.
+        :type manifest_path: Path
+        :param manifest: Manifest values.
+        :type manifest: dict[str, Any]
+        :return: Hook environment.
+        :rtype: dict[str, str]
+        """
+
+        environment = dict(os.environ)
+        archive_dir = manifest_path.parent
+        hook_values = {
+            "SHAKEN_GENERATION_ID": manifest.get("generation_id"),
+            "SHAKEN_ENVIRONMENT": manifest.get("environment"),
+            "SHAKEN_SERVER_ID": manifest.get("server_id"),
+            "SHAKEN_SPC": manifest.get("spc"),
+            "SHAKEN_PRIVATE_KEY_PATH": manifest.get("certificate_private_key_path"),
+            "SHAKEN_ARCHIVE_DIR": archive_dir,
+            "SHAKEN_MANIFEST_PATH": manifest_path,
+            "SHAKEN_LEAF_CERT_PATH": manifest.get("leaf_certificate_path"),
+            "SHAKEN_CHAIN_CERT_PATH": manifest.get("certificate_chain_path"),
+            "SHAKEN_CSR_PEM_PATH": archive_dir / "csr.pem",
+            "SHAKEN_CSR_DER_PATH": archive_dir / "csr.der",
+            "SHAKEN_NOT_BEFORE": manifest.get("not_before"),
+            "SHAKEN_NOT_AFTER": manifest.get("not_after"),
+            "SHAKEN_FINGERPRINT_SHA256": manifest.get("fingerprint_sha256"),
+            "SHAKEN_PREVIOUS_GENERATION_ID": manifest.get("previous_generation_id"),
+        }
+        for key, value in hook_values.items():
+            environment[key] = "" if value is None else str(value)
+        return environment
+
+    def build_manifest(self, **values: Any) -> dict[str, Any]:
+        """Build an active/archive manifest.
+
+        :param values: Manifest source values.
+        :type values: Any
+        :return: Manifest object.
+        :rtype: dict[str, Any]
+        """
+
+        cert_details = values["cert_details"]
+        generation_id = str(values["generation_id"])
+        subject = self.build_subject(generation_id).to_x509_name().rfc4514_string()
+        return {
+            "generation_id": generation_id,
+            "server_id": self.config.server_id,
+            "environment": self.config.environment,
+            "spc": self.config.spc,
+            "sp_id": self.config.sp_id,
+            "subject": subject,
+            "tn_auth_list_value": values["tn_auth_list_value"],
+            "certificate_private_key_path": str(values["installed_key_path"]),
+            "certificate_private_key_source": "peeringhub_acme_account_key",
+            "certificate_chain_path": str(values["chain_archive_path"]),
+            "leaf_certificate_path": str(values["leaf_archive_path"]),
+            "serial_number": cert_details["serial_number"],
+            "not_before": cert_details["not_before"],
+            "not_after": cert_details["not_after"],
+            "issuer": cert_details["issuer"],
+            "subject_key_identifier": "",
+            "fingerprint_sha256": cert_details["fingerprint_sha256"],
+            "acme_account_url": values["account_state"].account_url,
+            "acme_account_key_fingerprint": values[
+                "account_state"
+            ].account_key_fingerprint,
+            "acme_order_url": values["order_url"],
+            "acme_authorization_url": values["authorization_url"],
+            "acme_finalize_url": values["finalize_url"],
+            "acme_certificate_url": values["certificate_url"],
+            "stipa_token_jti": values["stipa_token"].jti,
+            "stipa_token_exp": values["stipa_token"].exp,
+            "stipa_x5u": values["stipa_token"].x5u,
+            "stipa_crl_url": values["stipa_token"].crl_url,
+            "installed_at": now_utc(),
+            "previous_generation_id": self.active_generation_id(),
+            "deploy_hook": self.config.deploy_hook,
+            "deploy_hook_status": values["deploy_hook_status"],
+        }
+
+    def validate_key_cert_pair(
+        self, key_path: Path, certificate_path: Path
+    ) -> StatusResult:
+        """Validate a specific key and certificate pair.
+
+        :param key_path: Key path.
+        :type key_path: Path
+        :param certificate_path: Certificate path.
+        :type certificate_path: Path
+        :return: Status result.
+        :rtype: StatusResult
+        """
+
+        try:
+            private_key = self.certificates.load_certificate_key(key_path)
+            certificate = self.certificates.parse_certificate(
+                certificate_path.read_bytes()
+            )
+            self.certificates.require_key_match(certificate, private_key)
+            return StatusResult(
+                OK,
+                "key and certificate match",
+                {
+                    "key_path": str(key_path),
+                    "certificate_path": str(certificate_path),
+                },
+            )
+        except (OSError, ValidationError, ShakenValidationError, ValueError) as exc:
+            return StatusResult(
+                CRITICAL,
+                str(exc),
+                {"key_path": str(key_path), "certificate_path": str(certificate_path)},
+            )
+
+    def record_failure(
+        self,
+        command: str,
+        generation_id: str,
+        transaction_dir: Path,
+        started_at: str,
+        exc: Exception,
+    ) -> None:
+        """Record a sanitized failure manifest.
+
+        :param command: Command name.
+        :type command: str
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :param transaction_dir: Transaction directory.
+        :type transaction_dir: Path
+        :param started_at: Start timestamp.
+        :type started_at: str
+        :param exc: Exception.
+        :type exc: Exception
+        :return: None.
+        :rtype: None
+        """
+
+        failed_dir = self.config.failed_dir / generation_id
+        if self.config.retain_failed_transactions:
+            failed_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+            atomic_write_json(
+                failed_dir / "failure.json",
+                {
+                    "generation_id": generation_id,
+                    "command": command,
+                    "sanitized_error": str(exc),
+                    "failed_at": now_utc(),
+                },
+                0o600,
+            )
+        if transaction_dir.exists():
+            shutil.rmtree(transaction_dir)
+        self.write_last_attempt(
+            command,
+            "failed",
+            str(exc),
+            started_at=started_at,
+            generation_id=generation_id,
+            active_generation_unchanged=True,
+        )
+        self.prune_failed_archives()
+
+    def archive_validation_failure(
+        self, generation_id: str, result: StirShakenIssuanceResult
+    ) -> None:
+        """Archive downloaded certificate artifacts after validation failure.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :param result: Partial issuance result.
+        :type result: StirShakenIssuanceResult
+        :return: None.
+        :rtype: None
+        """
+
+        if not self.config.retain_failed_transactions:
+            return
+        failed_dir = self.config.failed_dir / generation_id
+        failed_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        atomic_write_bytes(failed_dir / "csr.pem", result.csr_pem, 0o600)
+        atomic_write_bytes(failed_dir / "csr.der", result.csr_der, 0o600)
+        atomic_write_text(failed_dir / "leaf.pem", result.leaf_pem, 0o600)
+        atomic_write_text(
+            failed_dir / "certificate-chain.pem", result.chain_pem, 0o600
+        )
+        atomic_write_json(failed_dir / "order.json", result.valid_order, 0o600)
+        atomic_write_json(
+            failed_dir / "authorization.json", result.authorization, 0o600
+        )
+        atomic_write_json(
+            failed_dir / "challenge.json", result.submitted_challenge, 0o600
+        )
+        atomic_write_json(
+            failed_dir / "issuance.json",
+            {
+                "account": result.account_state.__dict__,
+                "authorization_url": result.authorization_url,
+                "certificate_private_key_path": str(result.certificate_key_path),
+                "certificate_private_key_source": "peeringhub_acme_account_key",
+                "certificate_url": result.certificate_url,
+                "finalize_url": result.finalize_url,
+                "order_url": result.order_url,
+                "stipa_token_exp": result.stipa_token.exp,
+                "stipa_token_jti": result.stipa_token.jti,
+                "tn_auth_list_value": result.tn_auth_list_value,
+                "validation_error": result.validation_error,
+            },
+            0o600,
+        )
+
+    def write_last_attempt(
+        self,
+        command: str,
+        result: str,
+        reason: str,
+        started_at: str | None = None,
+        generation_id: str | None = None,
+        active_generation_unchanged: bool = False,
+    ) -> None:
+        """Write the last-attempt manifest.
+
+        :param command: Command name.
+        :type command: str
+        :param result: Attempt result.
+        :type result: str
+        :param reason: Reason text.
+        :type reason: str
+        :param started_at: Optional start timestamp.
+        :type started_at: str | None
+        :param generation_id: Optional generation ID.
+        :type generation_id: str | None
+        :param active_generation_unchanged: Whether active generation was unchanged.
+        :type active_generation_unchanged: bool
+        :return: None.
+        :rtype: None
+        """
+
+        atomic_write_json(
+            self.config.last_attempt_path,
+            {
+                "started_at": started_at or now_utc(),
+                "finished_at": now_utc(),
+                "command": command,
+                "result": result,
+                "reason": reason,
+                "generation_id": generation_id,
+                "active_generation_unchanged": active_generation_unchanged,
+            },
+            0o600,
+        )
+
+    def prune_failed_archives(self) -> None:
+        """Limit retained failed transaction archives.
+
+        :return: None.
+        :rtype: None
+        """
+
+        failed_dirs = sorted(
+            [path for path in self.config.failed_dir.iterdir() if path.is_dir()],
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for directory in failed_dirs[self.config.max_failed_transactions_retained :]:
+            shutil.rmtree(directory)
+
+    def active_generation_id(self) -> str | None:
+        """Return active generation ID if present.
+
+        :return: Generation ID or ``None``.
+        :rtype: str | None
+        """
+
+        if not self.config.active_manifest_path.exists():
+            return None
+        try:
+            return str(read_json(self.config.active_manifest_path).get("generation_id"))
+        except (OSError, ValueError):
+            return None
+
+    def new_generation_id(self) -> str:
+        """Create a generation ID.
+
+        :return: Generation ID.
+        :rtype: str
+        """
+
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        return f"{self.config.server_id}-{timestamp}-{secrets.token_hex(5)}"
+
+    def prepare_peeringhub_issuer(self, generation_id: str) -> PeeringhubIssuer:
+        """Build a Peeringhub issuer for one certificate generation.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :return: Peeringhub issuer.
+        :rtype: PeeringhubIssuer
+        """
+
+        profile = PeeringhubProfile(
+            environment=self.config.environment,
+            acme_base_url=self.config.acme_url(),
+            stipa_base_url=self.config.stipa_url(),
+            stipa_crl_url=self.config.expected_crl_url(),
+            tn_auth_list_encoding="base64",
+        )
+        return PeeringhubIssuer.build(
+            profile=profile,
+            account_key_path=self.config.acme_account_key_path,
+            account_state_path=self.config.acme_account_state_path,
+            acme_kid=self.config.acme_kid,
+            stipa_settings=self.stipa_settings(),
+            certificate_policy=self.certificate_policy(generation_id),
+            acme_timeout_seconds=self.config.acme_timeout_seconds,
+            acme_bad_nonce_retries=self.config.acme_bad_nonce_retries,
+            acme_poll_interval_seconds=self.config.acme_poll_interval_seconds,
+            acme_poll_timeout_seconds=self.config.acme_poll_timeout_seconds,
+        )
+
+    def stipa_settings(self) -> StipaSettings:
+        """Build reusable STI-PA settings from manager configuration.
+
+        :return: STI-PA settings.
+        :rtype: StipaSettings
+        """
+
+        return StipaSettings(
+            base_url=self.config.stipa_url(),
+            user_id=self.config.stipa_user_id,
+            password=self.config.stipa_password,
+            sp_id=self.config.sp_id,
+            expected_crl_url=self.config.expected_crl_url(),
+            timeout_seconds=self.config.stipa_timeout_seconds,
+            ca=self.config.stipa_ca,
+            minimum_token_lifetime_seconds=self.config.acme_poll_timeout_seconds,
+        )
+
+    def certificate_policy(self, generation_id: str) -> ShakenCertificatePolicy:
+        """Build reusable SHAKEN certificate policy.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :return: Certificate policy.
+        :rtype: ShakenCertificatePolicy
+        """
+
+        return ShakenCertificatePolicy(
+            subject=self.build_subject(generation_id),
+            tn_auth_list_der=TnAuthList(self.config.spc).der(),
+            expected_crl_url=self.config.expected_crl_url(),
+            minimum_certificate_lifetime_days=(
+                self.config.minimum_certificate_lifetime_days
+            ),
+            include_crl_distribution_points=(
+                self.config.csr_include_crl_distribution_points
+            ),
+        )
+
+    def build_subject(self, generation_id: str) -> ShakenSubject:
+        """Build the configured certificate subject.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :return: SHAKEN subject.
+        :rtype: ShakenSubject
+        """
+
+        template_values = {
+            "generation_id": generation_id,
+            "server_id": self.config.server_id,
+            "spc": self.config.spc,
+            "organization": self.config.subject_organization_legal_name,
+        }
+        if self.config.subject_o_template:
+            organization = render_subject_template(
+                self.config.subject_o_template, template_values
+            )
+        else:
+            organization = (
+                f"{self.config.subject_organization_legal_name} "
+                f"{self.config.server_id} {generation_id}"
+            )
+        if self.config.subject_cn_template:
+            common_name = render_subject_template(
+                self.config.subject_cn_template, template_values
+            )
+        elif self.config.subject_strategy == "conservative_cn_unique_o":
+            common_name = f"SHAKEN {self.config.spc}"
+        else:
+            common_name = (
+                f"SHAKEN {self.config.spc} {self.config.server_id} {generation_id}"
+            )
+        return ShakenSubject(
+            country=self.config.subject_country,
+            state=self.config.subject_state,
+            locality=self.config.subject_locality,
+            organization=organization,
+            organizational_unit=self.config.subject_organizational_unit,
+            common_name=common_name,
+        )
+
+
+def render_subject_template(template: str, values: dict[str, str]) -> str:
+    """Render a certificate subject template.
+
+    :param template: Format string template.
+    :type template: str
+    :param values: Template values.
+    :type values: dict[str, str]
+    :return: Rendered subject value.
+    :rtype: str
+    :raises ValidationError: If the template references an unknown field.
+    """
+
+    try:
+        return template.format(**values)
+    except KeyError as exc:
+        field_name = str(exc.args[0])
+        raise ValidationError(
+            f"Unknown certificate subject template field: {field_name}"
+        ) from exc
+
+
+def parse_timestamp(value: str) -> datetime | None:
+    """Parse a manifest timestamp.
+
+    :param value: Timestamp text.
+    :type value: str
+    :return: Parsed timestamp or ``None``.
+    :rtype: datetime | None
+    """
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
