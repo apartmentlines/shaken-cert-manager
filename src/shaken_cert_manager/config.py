@@ -2,13 +2,38 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import yaml
 
 from shaken_cert_manager.errors import ConfigError
+
+ENVIRONMENT_OVERRIDES = {
+    "peeringhub_environment": "PEERINGHUB_ENVIRONMENT",
+    "server_id": "SHAKEN_SERVER_ID",
+    "stipa_spc": "STIPA_SPC",
+    "stipa_sp_id": "STIPA_SP_ID",
+    "stipa_user_id": "STIPA_USER_ID",
+    "stipa_password": "STIPA_PASSWORD",
+    "shaken_subject_country": "SHAKEN_SUBJECT_COUNTRY",
+    "shaken_subject_state": "SHAKEN_SUBJECT_STATE",
+    "shaken_subject_locality": "SHAKEN_SUBJECT_LOCALITY",
+    "shaken_subject_organization": "SHAKEN_SUBJECT_ORGANIZATION",
+    "shaken_subject_organizational_unit": "SHAKEN_SUBJECT_ORGANIZATIONAL_UNIT",
+    "shaken_subject_common_name_template": "SHAKEN_SUBJECT_COMMON_NAME_TEMPLATE",
+    "shaken_subject_organization_template": "SHAKEN_SUBJECT_ORGANIZATION_TEMPLATE",
+    "subject_strategy": "SHAKEN_SUBJECT_STRATEGY",
+    "acme_kid": "ACME_KID",
+    "account_dir": "ACME_ACCOUNT_DIR",
+    "acme_account_key_path": "ACME_ACCOUNT_KEY_PATH",
+    "acme_account_state_path": "ACME_ACCOUNT_STATE_PATH",
+    "not_before": "SHAKEN_NOT_BEFORE",
+    "not_after": "SHAKEN_NOT_AFTER",
+    "minimum_certificate_lifetime_days": "SHAKEN_MINIMUM_CERTIFICATE_LIFETIME_DAYS",
+}
 
 
 @dataclass
@@ -97,44 +122,51 @@ class ManagerConfig:
         return config
 
     @classmethod
-    def from_mapping(cls, data: dict[str, Any]) -> ManagerConfig:
+    def from_mapping(
+        cls,
+        data: dict[str, Any],
+        env: Mapping[str, str] | None = None,
+    ) -> ManagerConfig:
         """Build configuration from a mapping.
 
         :param data: Configuration mapping.
         :type data: dict[str, Any]
+        :param env: Optional environment mapping.
+        :type env: Mapping[str, str] | None
         :return: Loaded configuration.
         :rtype: ManagerConfig
         """
 
-        server_id = string_value(data, "server_id", "")
-        peeringhub_environment = string_value(data, "peeringhub_environment", "staging")
+        resolver = ConfigValueResolver(data, os.environ if env is None else env)
+        server_id = resolver.string("server_id", "")
+        peeringhub_environment = resolver.string("peeringhub_environment", "staging")
+        stipa_spc = resolver.string("stipa_spc", "")
+        account_dir = resolver.path("account_dir", "/var/lib/shaken/account")
         return cls(
             enabled=bool(data.get("enabled", False)),
             peeringhub_environment=peeringhub_environment,
             server_id=server_id,
-            stipa_spc=string_value(data, "stipa_spc", ""),
-            stipa_sp_id=string_value(
-                data, "stipa_sp_id", string_value(data, "stipa_spc", "")
+            stipa_spc=stipa_spc,
+            stipa_sp_id=resolver.string("stipa_sp_id", stipa_spc),
+            shaken_subject_country=resolver.string("shaken_subject_country", "US"),
+            shaken_subject_state=resolver.string("shaken_subject_state", ""),
+            shaken_subject_locality=resolver.string("shaken_subject_locality", ""),
+            shaken_subject_organization=resolver.string(
+                "shaken_subject_organization", ""
             ),
-            shaken_subject_country=string_value(data, "shaken_subject_country", "US"),
-            shaken_subject_state=string_value(data, "shaken_subject_state", ""),
-            shaken_subject_locality=string_value(data, "shaken_subject_locality", ""),
-            shaken_subject_organization=string_value(
-                data, "shaken_subject_organization", ""
+            stipa_user_id=resolver.string("stipa_user_id", ""),
+            stipa_password=resolver.string("stipa_password", ""),
+            shaken_subject_organizational_unit=resolver.string(
+                "shaken_subject_organizational_unit", "VoIP"
             ),
-            stipa_user_id=string_value(data, "stipa_user_id", ""),
-            stipa_password=string_value(data, "stipa_password", ""),
-            shaken_subject_organizational_unit=string_value(
-                data, "shaken_subject_organizational_unit", "VoIP"
+            subject_strategy=resolver.string(
+                "subject_strategy", "unique_per_generation"
             ),
-            subject_strategy=string_value(
-                data, "subject_strategy", "unique_per_generation"
+            shaken_subject_common_name_template=resolver.string(
+                "shaken_subject_common_name_template", ""
             ),
-            shaken_subject_common_name_template=string_value(
-                data, "shaken_subject_common_name_template", ""
-            ),
-            shaken_subject_organization_template=string_value(
-                data, "shaken_subject_organization_template", ""
+            shaken_subject_organization_template=resolver.string(
+                "shaken_subject_organization_template", ""
             ),
             acme_base_url=mapping_value(
                 data,
@@ -144,21 +176,19 @@ class ManagerConfig:
                     "staging": "https://stica-dev.peeringhub.io/acme",
                 },
             ),
-            acme_kid=string_value(
-                data, "acme_kid", f"{server_id}-{peeringhub_environment}"
+            acme_kid=resolver.string(
+                "acme_kid", f"{server_id}-{peeringhub_environment}"
             ),
             acme_account_key_path=Path(
-                string_value(
-                    data,
+                resolver.string(
                     "acme_account_key_path",
-                    "/var/lib/shaken/account/account.key",
+                    str(account_dir / "account.key"),
                 )
             ),
             acme_account_state_path=Path(
-                string_value(
-                    data,
+                resolver.string(
                     "acme_account_state_path",
-                    "/var/lib/shaken/account/account.json",
+                    str(account_dir / "account.json"),
                 )
             ),
             acme_timeout_seconds=int(data.get("acme_timeout_seconds", 30)),
@@ -186,12 +216,12 @@ class ManagerConfig:
             certificate_lifetime_mode=string_value(
                 data, "certificate_lifetime_mode", "peeringhub_default"
             ),
-            not_before=optional_string_value(data, "not_before"),
-            not_after=optional_string_value(data, "not_after"),
+            not_before=resolver.optional_string("not_before"),
+            not_after=resolver.optional_string("not_after"),
             renew_before_days=int(data.get("renew_before_days", 45)),
             warning_days=int(data.get("warning_days", 52)),
-            minimum_certificate_lifetime_days=int(
-                data.get("minimum_certificate_lifetime_days", 21)
+            minimum_certificate_lifetime_days=resolver.integer(
+                "minimum_certificate_lifetime_days", 21
             ),
             retention_days_after_expiry=int(
                 data.get("retention_days_after_expiry", 30)
@@ -231,9 +261,7 @@ class ManagerConfig:
             failed_dir=Path(
                 string_value(data, "failed_dir", "/var/lib/shaken/failed")
             ),
-            account_dir=Path(
-                string_value(data, "account_dir", "/var/lib/shaken/account")
-            ),
+            account_dir=account_dir,
             active_manifest_path=Path(
                 string_value(
                     data, "active_manifest_path", "/var/lib/shaken/active.json"
@@ -336,19 +364,106 @@ def string_value(data: dict[str, Any], key: str, default: str) -> str:
     return "" if value is None else str(value)
 
 
-def optional_string_value(data: dict[str, Any], key: str) -> str | None:
-    """Return an optional string config value.
+class ConfigValueResolver:
+    """Resolve manager values from environment, config, and built-in defaults."""
 
-    :param data: Config mapping.
-    :type data: dict[str, Any]
-    :param key: Config key.
-    :type key: str
-    :return: Config value or ``None``.
-    :rtype: str | None
-    """
+    def __init__(self, data: dict[str, Any], env: Mapping[str, str]) -> None:
+        """Initialize the resolver.
 
-    value = data.get(key)
-    return None if value in {None, ""} else str(value)
+        :param data: Config mapping.
+        :type data: dict[str, Any]
+        :param env: Environment mapping.
+        :type env: Mapping[str, str]
+        """
+
+        self.data = data
+        self.env = env
+
+    def value(self, key: str, default: object = None) -> object:
+        """Resolve one value.
+
+        :param key: Config key.
+        :type key: str
+        :param default: Default value.
+        :type default: object
+        :return: Resolved value.
+        :rtype: object
+        """
+
+        env_name = ENVIRONMENT_OVERRIDES.get(key)
+        if env_name is not None and self.env.get(env_name, "") != "":
+            return self.env[env_name]
+        if key in self.data and not self.is_blank(self.data[key]):
+            return self.data[key]
+        return default
+
+    def string(self, key: str, default: str) -> str:
+        """Resolve one string value.
+
+        :param key: Config key.
+        :type key: str
+        :param default: Default value.
+        :type default: str
+        :return: Resolved string.
+        :rtype: str
+        """
+
+        value = self.value(key, default)
+        return "" if value is None else str(value)
+
+    def optional_string(self, key: str) -> str | None:
+        """Resolve one optional string value.
+
+        :param key: Config key.
+        :type key: str
+        :return: Resolved string or ``None``.
+        :rtype: str | None
+        """
+
+        value = self.value(key)
+        return None if self.is_blank(value) else str(value)
+
+    def integer(self, key: str, default: int) -> int:
+        """Resolve one integer value.
+
+        :param key: Config key.
+        :type key: str
+        :param default: Default value.
+        :type default: int
+        :return: Resolved integer.
+        :rtype: int
+        :raises ConfigError: If the value is not an integer.
+        """
+
+        value = self.value(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"{key} must be an integer") from exc
+
+    def path(self, key: str, default: str) -> Path:
+        """Resolve one path value.
+
+        :param key: Config key.
+        :type key: str
+        :param default: Default path.
+        :type default: str
+        :return: Resolved path.
+        :rtype: Path
+        """
+
+        return Path(self.string(key, default))
+
+    def is_blank(self, value: object) -> bool:
+        """Return whether a value should be treated as unset.
+
+        :param value: Candidate value.
+        :type value: object
+        :return: Whether the value is unset.
+        :rtype: bool
+        """
+
+        return value is None or value == ""
 
 
 def mapping_value(
