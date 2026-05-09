@@ -10,7 +10,15 @@ requires-python = ">=3.10"
 dependencies = [
   "cryptography>=41",
   "PyYAML>=6.0",
-  "stir-shaken-toolkit",
+  # "stir-shaken-toolkit",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "flake8",
+    "basedpyright",
 ]
 
 [project.scripts]
