@@ -65,8 +65,8 @@ class StatusChecker:
 
         base_fields = {
             "server_id": self.config.server_id,
-            "environment": self.config.environment,
-            "spc": self.config.spc,
+            "peeringhub_environment": self.config.peeringhub_environment,
+            "stipa_spc": self.config.stipa_spc,
         }
         if not self.config.enabled:
             return StatusResult(

@@ -136,7 +136,7 @@ class ShakenCertManager:
         :rtype: int
         """
 
-        if self.config.environment == "production" and not (
+        if self.config.peeringhub_environment == "production" and not (
             allow_production or self.config.allow_production_force_renew
         ):
             raise ManagerError(
@@ -158,7 +158,7 @@ class ShakenCertManager:
 
         with FileLock(self.config.lock_path, wait_lock):
             PeeringhubIssuer.for_account_status(
-                environment=self.config.environment,
+                environment=self.config.peeringhub_environment,
                 acme_base_url=self.config.acme_url(),
                 account_key_path=self.config.acme_account_key_path,
                 account_state_path=self.config.acme_account_state_path,
@@ -240,7 +240,7 @@ class ShakenCertManager:
             self.preflight()
             issuer = self.prepare_peeringhub_issuer(generation_id)
             result = issuer.issue(
-                self.config.spc,
+                self.config.stipa_spc,
                 not_before=self.config.not_before,
                 not_after=self.config.not_after,
             )
@@ -416,9 +416,9 @@ class ShakenCertManager:
         live_current_dir = self.config.live_dir / "current"
         hook_values = {
             "SHAKEN_GENERATION_ID": manifest.get("generation_id"),
-            "SHAKEN_ENVIRONMENT": manifest.get("environment"),
+            "SHAKEN_ENVIRONMENT": manifest.get("peeringhub_environment"),
             "SHAKEN_SERVER_ID": manifest.get("server_id"),
-            "SHAKEN_SPC": manifest.get("spc"),
+            "SHAKEN_SPC": manifest.get("stipa_spc"),
             "SHAKEN_PRIVATE_KEY_PATH": manifest.get("certificate_private_key_path"),
             "SHAKEN_ARCHIVE_DIR": archive_dir,
             "SHAKEN_LIVE_DIR": self.config.live_dir,
@@ -458,9 +458,9 @@ class ShakenCertManager:
         return {
             "generation_id": generation_id,
             "server_id": self.config.server_id,
-            "environment": self.config.environment,
-            "spc": self.config.spc,
-            "sp_id": self.config.sp_id,
+            "peeringhub_environment": self.config.peeringhub_environment,
+            "stipa_spc": self.config.stipa_spc,
+            "stipa_sp_id": self.config.stipa_sp_id,
             "subject": subject,
             "tn_auth_list_value": values["tn_auth_list_value"],
             "certificate_private_key_path": str(values["installed_key_path"]),
@@ -842,7 +842,7 @@ class ShakenCertManager:
         """
 
         profile = PeeringhubProfile(
-            environment=self.config.environment,
+            environment=self.config.peeringhub_environment,
             acme_base_url=self.config.acme_url(),
             stipa_base_url=self.config.stipa_url(),
             stipa_crl_url=self.config.expected_crl_url(),
@@ -872,7 +872,7 @@ class ShakenCertManager:
             base_url=self.config.stipa_url(),
             user_id=self.config.stipa_user_id,
             password=self.config.stipa_password,
-            sp_id=self.config.sp_id,
+            sp_id=self.config.stipa_sp_id,
             expected_crl_url=self.config.expected_crl_url(),
             timeout_seconds=self.config.stipa_timeout_seconds,
             ca=self.config.stipa_ca,
@@ -890,13 +890,13 @@ class ShakenCertManager:
 
         return ShakenCertificatePolicy(
             subject=self.build_subject(generation_id),
-            tn_auth_list_der=TnAuthList(self.config.spc).der(),
+            tn_auth_list_der=TnAuthList(self.config.stipa_spc).der(),
             expected_crl_url=self.config.expected_crl_url(),
             minimum_certificate_lifetime_days=(
                 self.config.minimum_certificate_lifetime_days
             ),
             include_crl_distribution_points=(
-                self.config.csr_include_crl_distribution_points
+                self.config.include_crl_distribution_points
             ),
         )
 
@@ -912,34 +912,34 @@ class ShakenCertManager:
         template_values = {
             "generation_id": generation_id,
             "server_id": self.config.server_id,
-            "spc": self.config.spc,
-            "organization": self.config.subject_organization_legal_name,
+            "stipa_spc": self.config.stipa_spc,
+            "organization": self.config.shaken_subject_organization,
         }
-        if self.config.subject_o_template:
+        if self.config.shaken_subject_organization_template:
             organization = render_subject_template(
-                self.config.subject_o_template, template_values
+                self.config.shaken_subject_organization_template, template_values
             )
         else:
             organization = (
-                f"{self.config.subject_organization_legal_name} "
+                f"{self.config.shaken_subject_organization} "
                 f"{self.config.server_id} {generation_id}"
             )
-        if self.config.subject_cn_template:
+        if self.config.shaken_subject_common_name_template:
             common_name = render_subject_template(
-                self.config.subject_cn_template, template_values
+                self.config.shaken_subject_common_name_template, template_values
             )
         elif self.config.subject_strategy == "conservative_cn_unique_o":
-            common_name = f"SHAKEN {self.config.spc}"
+            common_name = f"SHAKEN {self.config.stipa_spc}"
         else:
             common_name = (
-                f"SHAKEN {self.config.spc} {self.config.server_id} {generation_id}"
+                f"SHAKEN {self.config.stipa_spc} {self.config.server_id} {generation_id}"
             )
         return ShakenSubject(
-            country=self.config.subject_country,
-            state=self.config.subject_state,
-            locality=self.config.subject_locality,
+            country=self.config.shaken_subject_country,
+            state=self.config.shaken_subject_state,
+            locality=self.config.shaken_subject_locality,
             organization=organization,
-            organizational_unit=self.config.subject_organizational_unit,
+            organizational_unit=self.config.shaken_subject_organizational_unit,
             common_name=common_name,
         )
 

@@ -16,20 +16,20 @@ class ManagerConfig:
     """Runtime configuration for SHAKEN certificate management."""
 
     enabled: bool
-    environment: str
+    peeringhub_environment: str
     server_id: str
-    spc: str
-    sp_id: str
-    subject_country: str
-    subject_state: str
-    subject_locality: str
-    subject_organization_legal_name: str
+    stipa_spc: str
+    stipa_sp_id: str
+    shaken_subject_country: str
+    shaken_subject_state: str
+    shaken_subject_locality: str
+    shaken_subject_organization: str
     stipa_user_id: str
     stipa_password: str
-    subject_organizational_unit: str
+    shaken_subject_organizational_unit: str
     subject_strategy: str
-    subject_cn_template: str
-    subject_o_template: str
+    shaken_subject_common_name_template: str
+    shaken_subject_organization_template: str
     acme_base_url: dict[str, str]
     acme_kid: str
     acme_account_key_path: Path
@@ -57,7 +57,7 @@ class ManagerConfig:
     write_debug_artifacts: bool
     retain_failed_transactions: bool
     max_failed_transactions_retained: int
-    csr_include_crl_distribution_points: bool
+    include_crl_distribution_points: bool
     allow_production_force_renew: bool
     state_dir: Path = Path("/var/lib/shaken")
     work_dir: Path = Path("/var/lib/shaken/work")
@@ -107,29 +107,35 @@ class ManagerConfig:
         """
 
         server_id = string_value(data, "server_id", "")
-        environment = string_value(data, "environment", "staging")
+        peeringhub_environment = string_value(data, "peeringhub_environment", "staging")
         return cls(
             enabled=bool(data.get("enabled", False)),
-            environment=environment,
+            peeringhub_environment=peeringhub_environment,
             server_id=server_id,
-            spc=string_value(data, "spc", ""),
-            sp_id=string_value(data, "sp_id", string_value(data, "spc", "")),
-            subject_country=string_value(data, "subject_country", "US"),
-            subject_state=string_value(data, "subject_state", ""),
-            subject_locality=string_value(data, "subject_locality", ""),
-            subject_organization_legal_name=string_value(
-                data, "subject_organization_legal_name", ""
+            stipa_spc=string_value(data, "stipa_spc", ""),
+            stipa_sp_id=string_value(
+                data, "stipa_sp_id", string_value(data, "stipa_spc", "")
+            ),
+            shaken_subject_country=string_value(data, "shaken_subject_country", "US"),
+            shaken_subject_state=string_value(data, "shaken_subject_state", ""),
+            shaken_subject_locality=string_value(data, "shaken_subject_locality", ""),
+            shaken_subject_organization=string_value(
+                data, "shaken_subject_organization", ""
             ),
             stipa_user_id=string_value(data, "stipa_user_id", ""),
             stipa_password=string_value(data, "stipa_password", ""),
-            subject_organizational_unit=string_value(
-                data, "subject_organizational_unit", "VoIP"
+            shaken_subject_organizational_unit=string_value(
+                data, "shaken_subject_organizational_unit", "VoIP"
             ),
             subject_strategy=string_value(
                 data, "subject_strategy", "unique_per_generation"
             ),
-            subject_cn_template=string_value(data, "subject_cn_template", ""),
-            subject_o_template=string_value(data, "subject_o_template", ""),
+            shaken_subject_common_name_template=string_value(
+                data, "shaken_subject_common_name_template", ""
+            ),
+            shaken_subject_organization_template=string_value(
+                data, "shaken_subject_organization_template", ""
+            ),
             acme_base_url=mapping_value(
                 data,
                 "acme_base_url",
@@ -138,7 +144,9 @@ class ManagerConfig:
                     "staging": "https://stica-dev.peeringhub.io/acme",
                 },
             ),
-            acme_kid=string_value(data, "acme_kid", f"{server_id}-{environment}"),
+            acme_kid=string_value(
+                data, "acme_kid", f"{server_id}-{peeringhub_environment}"
+            ),
             acme_account_key_path=Path(
                 string_value(
                     data,
@@ -208,8 +216,8 @@ class ManagerConfig:
             max_failed_transactions_retained=int(
                 data.get("max_failed_transactions_retained", 10)
             ),
-            csr_include_crl_distribution_points=bool(
-                data.get("csr_include_crl_distribution_points", False)
+            include_crl_distribution_points=bool(
+                data.get("include_crl_distribution_points", False)
             ),
             allow_production_force_renew=bool(
                 data.get("allow_production_force_renew", False)
@@ -252,19 +260,19 @@ class ManagerConfig:
         :raises ConfigError: If required values are invalid.
         """
 
-        if self.environment not in {"staging", "production"}:
-            raise ConfigError("environment must be staging or production")
+        if self.peeringhub_environment not in {"staging", "production"}:
+            raise ConfigError("peeringhub_environment must be staging or production")
         if not self.server_id:
             raise ConfigError("server_id is required")
-        if self.subject_country != "US":
-            raise ConfigError("subject_country must be US")
+        if self.shaken_subject_country != "US":
+            raise ConfigError("shaken_subject_country must be US")
         if self.enabled:
             required_fields = {
-                "spc": self.spc,
-                "sp_id": self.sp_id,
-                "subject_state": self.subject_state,
-                "subject_locality": self.subject_locality,
-                "subject_organization_legal_name": self.subject_organization_legal_name,
+                "stipa_spc": self.stipa_spc,
+                "stipa_sp_id": self.stipa_sp_id,
+                "shaken_subject_state": self.shaken_subject_state,
+                "shaken_subject_locality": self.shaken_subject_locality,
+                "shaken_subject_organization": self.shaken_subject_organization,
                 "stipa_user_id": self.stipa_user_id,
                 "stipa_password": self.stipa_password,
             }
@@ -278,35 +286,37 @@ class ManagerConfig:
             "stipa_base_url": self.stipa_base_url,
             "stipa_crl_url": self.stipa_crl_url,
         }.items():
-            if self.environment not in url_map:
-                raise ConfigError(f"{url_map_name} missing {self.environment}")
+            if self.peeringhub_environment not in url_map:
+                raise ConfigError(
+                    f"{url_map_name} missing {self.peeringhub_environment}"
+                )
 
     def acme_url(self) -> str:
-        """Return the configured ACME URL for this environment.
+        """Return the configured ACME URL for this Peeringhub environment.
 
         :return: ACME URL.
         :rtype: str
         """
 
-        return self.acme_base_url[self.environment]
+        return self.acme_base_url[self.peeringhub_environment]
 
     def stipa_url(self) -> str:
-        """Return the configured STI-PA URL for this environment.
+        """Return the configured STI-PA URL for this Peeringhub environment.
 
         :return: STI-PA URL.
         :rtype: str
         """
 
-        return self.stipa_base_url[self.environment]
+        return self.stipa_base_url[self.peeringhub_environment]
 
     def expected_crl_url(self) -> str:
-        """Return the configured STI-PA CRL URL for this environment.
+        """Return the configured STI-PA CRL URL for this Peeringhub environment.
 
         :return: CRL URL.
         :rtype: str
         """
 
-        return self.stipa_crl_url[self.environment]
+        return self.stipa_crl_url[self.peeringhub_environment]
 
 
 def string_value(data: dict[str, Any], key: str, default: str) -> str:
