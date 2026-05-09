@@ -63,14 +63,13 @@ class ManagerConfig:
     acme_kid: str
     acme_account_key_path: Path
     acme_account_state_path: Path
-    acme_timeout_seconds: int
-    acme_poll_interval_seconds: int
-    acme_poll_timeout_seconds: int
-    acme_bad_nonce_retries: int
+    acme_timeout_seconds: int | None
+    acme_poll_interval_seconds: int | None
+    acme_poll_timeout_seconds: int | None
+    acme_bad_nonce_retries: int | None
     stipa_base_url_override: str | None
-    stipa_timeout_seconds: int
+    stipa_timeout_seconds: int | None
     stipa_crl_url_override: str | None
-    stipa_ca: bool
     certificate_lifetime_mode: str
     not_before: str | None
     not_after: str | None
@@ -79,15 +78,12 @@ class ManagerConfig:
     minimum_certificate_lifetime_days: int
     retention_days_after_expiry: int
     timer_randomized_delay_seconds: int
-    initial_issue_on_highstate: bool
-    fail_highstate_if_no_valid_cert: bool
     deploy_hook: str
     deploy_hook_timeout_seconds: int
     write_debug_artifacts: bool
     retain_failed_transactions: bool
     max_failed_transactions_retained: int
     include_crl_distribution_points: bool
-    allow_production_force_renew: bool
     state_dir: Path = Path("/var/lib/shaken")
     work_dir: Path = Path("/var/lib/shaken/work")
     archive_dir: Path = Path("/var/lib/shaken/archive")
@@ -143,11 +139,11 @@ class ManagerConfig:
 
         resolver = ConfigValueResolver(data, os.environ if env is None else env)
         server_id = resolver.string("server_id", "")
-        peeringhub_environment = resolver.string("peeringhub_environment", "staging")
+        peeringhub_environment = resolver.string("peeringhub_environment", "production")
         stipa_spc = resolver.string("stipa_spc", "")
         account_dir = resolver.path("account_dir", "/var/lib/shaken/account")
         return cls(
-            enabled=bool(data.get("enabled", False)),
+            enabled=bool(data.get("enabled", True)),
             peeringhub_environment=peeringhub_environment,
             server_id=server_id,
             stipa_spc=stipa_spc,
@@ -173,9 +169,7 @@ class ManagerConfig:
                 "shaken_subject_organization_template", ""
             ),
             acme_base_url_override=resolver.optional_string("acme_base_url_override"),
-            acme_kid=resolver.string(
-                "acme_kid", f"{server_id}-{peeringhub_environment}"
-            ),
+            acme_kid=resolver.string("acme_kid", ""),
             acme_account_key_path=Path(
                 resolver.string(
                     "acme_account_key_path",
@@ -188,14 +182,17 @@ class ManagerConfig:
                     str(account_dir / "account.json"),
                 )
             ),
-            acme_timeout_seconds=int(data.get("acme_timeout_seconds", 30)),
-            acme_poll_interval_seconds=int(data.get("acme_poll_interval_seconds", 5)),
-            acme_poll_timeout_seconds=int(data.get("acme_poll_timeout_seconds", 180)),
-            acme_bad_nonce_retries=int(data.get("acme_bad_nonce_retries", 2)),
+            acme_timeout_seconds=resolver.optional_integer("acme_timeout_seconds"),
+            acme_poll_interval_seconds=resolver.optional_integer(
+                "acme_poll_interval_seconds"
+            ),
+            acme_poll_timeout_seconds=resolver.optional_integer(
+                "acme_poll_timeout_seconds"
+            ),
+            acme_bad_nonce_retries=resolver.optional_integer("acme_bad_nonce_retries"),
             stipa_base_url_override=resolver.optional_string("stipa_base_url_override"),
-            stipa_timeout_seconds=int(data.get("stipa_timeout_seconds", 30)),
+            stipa_timeout_seconds=resolver.optional_integer("stipa_timeout_seconds"),
             stipa_crl_url_override=resolver.optional_string("stipa_crl_url_override"),
-            stipa_ca=bool(data.get("stipa_ca", False)),
             certificate_lifetime_mode=string_value(
                 data, "certificate_lifetime_mode", "peeringhub_default"
             ),
@@ -212,12 +209,6 @@ class ManagerConfig:
             timer_randomized_delay_seconds=int(
                 data.get("timer_randomized_delay_seconds", 21600)
             ),
-            initial_issue_on_highstate=bool(
-                data.get("initial_issue_on_highstate", True)
-            ),
-            fail_highstate_if_no_valid_cert=bool(
-                data.get("fail_highstate_if_no_valid_cert", True)
-            ),
             deploy_hook=string_value(data, "deploy_hook", ""),
             deploy_hook_timeout_seconds=int(
                 data.get("deploy_hook_timeout_seconds", 60)
@@ -231,9 +222,6 @@ class ManagerConfig:
             ),
             include_crl_distribution_points=bool(
                 data.get("include_crl_distribution_points", False)
-            ),
-            allow_production_force_renew=bool(
-                data.get("allow_production_force_renew", False)
             ),
             state_dir=Path(string_value(data, "state_dir", "/var/lib/shaken")),
             work_dir=Path(string_value(data, "work_dir", "/var/lib/shaken/work")),
@@ -286,6 +274,7 @@ class ManagerConfig:
                 "shaken_subject_organization": self.shaken_subject_organization,
                 "stipa_user_id": self.stipa_user_id,
                 "stipa_password": self.stipa_password,
+                "acme_kid": self.acme_kid,
             }
             missing = [name for name, value in required_fields.items() if not value]
             if missing:
@@ -425,6 +414,24 @@ class ConfigValueResolver:
         """
 
         value = self.value(key, default)
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(f"{key} must be an integer") from exc
+
+    def optional_integer(self, key: str) -> int | None:
+        """Resolve one optional integer value.
+
+        :param key: Config key.
+        :type key: str
+        :return: Resolved integer or ``None``.
+        :rtype: int | None
+        :raises ConfigError: If the value is not an integer.
+        """
+
+        value = self.value(key)
+        if self.is_blank(value):
+            return None
         try:
             return int(value)
         except (TypeError, ValueError) as exc:

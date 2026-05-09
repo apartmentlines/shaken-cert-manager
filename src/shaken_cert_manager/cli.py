@@ -40,10 +40,8 @@ class ShakenCertManagerCli:
             if args.command == "renew":
                 return manager.renew(wait_lock=args.wait_lock)
             if args.command == "force-renew":
-                return manager.force_renew(
-                    wait_lock=args.wait_lock,
-                    allow_production=args.allow_production_force_renew,
-                )
+                self.confirm_force_renew(args.skip_confirm)
+                return manager.force_renew(wait_lock=args.wait_lock)
             if args.command == "issue-initial":
                 return manager.issue_initial(wait_lock=args.wait_lock)
             if args.command == "cleanup":
@@ -96,9 +94,9 @@ class ShakenCertManagerCli:
             "--wait-lock", action="store_true", help="Wait for an existing manager lock"
         )
         force_parser.add_argument(
-            "--allow-production-force-renew",
+            "--skip-confirm",
             action="store_true",
-            help="Allow force-renew in production",
+            help="Run force-renew without interactive confirmation",
         )
         initial_parser = subparsers.add_parser(
             "issue-initial", help="Issue only when no active certificate exists"
@@ -126,6 +124,24 @@ class ShakenCertManagerCli:
             "--certificate", required=True, help="Certificate path"
         )
         return parser.parse_args(argv)
+
+    def confirm_force_renew(self, skip_confirm: bool) -> None:
+        """Confirm an explicit force renewal.
+
+        :param skip_confirm: Skip interactive confirmation.
+        :type skip_confirm: bool
+        :return: None.
+        :rtype: None
+        :raises ManagerError: If confirmation is refused or unavailable.
+        """
+
+        if skip_confirm:
+            return
+        if not sys.stdin.isatty():
+            raise ManagerError("force-renew requires --skip-confirm when non-interactive")
+        answer = input("Force certificate renewal now? Type 'yes' to continue: ")
+        if answer != "yes":
+            raise ManagerError("force-renew cancelled")
 
 
 def main() -> int:

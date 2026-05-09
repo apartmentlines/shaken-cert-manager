@@ -123,25 +123,15 @@ class ShakenCertManager:
             self.issue_certificate("renew", force=False)
             return 0
 
-    def force_renew(
-        self, wait_lock: bool = False, allow_production: bool = False
-    ) -> int:
+    def force_renew(self, wait_lock: bool = False) -> int:
         """Force a certificate renewal.
 
         :param wait_lock: Wait for manager lock.
         :type wait_lock: bool
-        :param allow_production: Allow production force-renew.
-        :type allow_production: bool
         :return: Exit code.
         :rtype: int
         """
 
-        if self.config.peeringhub_environment == "production" and not (
-            allow_production or self.config.allow_production_force_renew
-        ):
-            raise ManagerError(
-                "force-renew in production requires --allow-production-force-renew or config allowance"
-            )
         with FileLock(self.config.lock_path, wait_lock):
             self.prune_live_links()
             self.issue_certificate("force-renew", force=True)
@@ -157,15 +147,22 @@ class ShakenCertManager:
         """
 
         with FileLock(self.config.lock_path, wait_lock):
-            PeeringhubIssuer.for_account_status(
-                environment=self.config.peeringhub_environment,
-                acme_base_url=self.config.acme_url(),
-                account_key_path=self.config.acme_account_key_path,
-                account_state_path=self.config.acme_account_state_path,
-                acme_kid=self.config.acme_kid,
-                timeout_seconds=self.config.acme_timeout_seconds,
-                bad_nonce_retries=self.config.acme_bad_nonce_retries,
-            ).prepare_account()
+            account_status_kwargs = {
+                "environment": self.config.peeringhub_environment,
+                "acme_base_url": self.config.acme_url(),
+                "account_key_path": self.config.acme_account_key_path,
+                "account_state_path": self.config.acme_account_state_path,
+                "acme_kid": self.config.acme_kid,
+            }
+            if self.config.acme_timeout_seconds is not None:
+                account_status_kwargs["timeout_seconds"] = (
+                    self.config.acme_timeout_seconds
+                )
+            if self.config.acme_bad_nonce_retries is not None:
+                account_status_kwargs["bad_nonce_retries"] = (
+                    self.config.acme_bad_nonce_retries
+                )
+            PeeringhubIssuer.for_account_status(**account_status_kwargs).prepare_account()
             return 0
 
     def cleanup(self, wait_lock: bool = False) -> int:
@@ -841,18 +838,27 @@ class ShakenCertManager:
         :rtype: PeeringhubIssuer
         """
 
-        return PeeringhubIssuer.build(
-            profile=self.config.peeringhub_profile(),
-            account_key_path=self.config.acme_account_key_path,
-            account_state_path=self.config.acme_account_state_path,
-            acme_kid=self.config.acme_kid,
-            stipa_settings=self.stipa_settings(),
-            certificate_policy=self.certificate_policy(generation_id),
-            acme_timeout_seconds=self.config.acme_timeout_seconds,
-            acme_bad_nonce_retries=self.config.acme_bad_nonce_retries,
-            acme_poll_interval_seconds=self.config.acme_poll_interval_seconds,
-            acme_poll_timeout_seconds=self.config.acme_poll_timeout_seconds,
-        )
+        issuer_kwargs = {
+            "profile": self.config.peeringhub_profile(),
+            "account_key_path": self.config.acme_account_key_path,
+            "account_state_path": self.config.acme_account_state_path,
+            "acme_kid": self.config.acme_kid,
+            "stipa_settings": self.stipa_settings(),
+            "certificate_policy": self.certificate_policy(generation_id),
+        }
+        if self.config.acme_timeout_seconds is not None:
+            issuer_kwargs["acme_timeout_seconds"] = self.config.acme_timeout_seconds
+        if self.config.acme_bad_nonce_retries is not None:
+            issuer_kwargs["acme_bad_nonce_retries"] = self.config.acme_bad_nonce_retries
+        if self.config.acme_poll_interval_seconds is not None:
+            issuer_kwargs["acme_poll_interval_seconds"] = (
+                self.config.acme_poll_interval_seconds
+            )
+        if self.config.acme_poll_timeout_seconds is not None:
+            issuer_kwargs["acme_poll_timeout_seconds"] = (
+                self.config.acme_poll_timeout_seconds
+            )
+        return PeeringhubIssuer.build(**issuer_kwargs)
 
     def stipa_settings(self) -> StipaSettings:
         """Build reusable STI-PA settings from manager configuration.
@@ -861,15 +867,22 @@ class ShakenCertManager:
         :rtype: StipaSettings
         """
 
+        stipa_kwargs = {
+            "base_url": self.config.stipa_url(),
+            "user_id": self.config.stipa_user_id,
+            "password": self.config.stipa_password,
+            "sp_id": self.config.stipa_sp_id,
+            "expected_crl_url": self.config.expected_crl_url(),
+            "ca": False,
+        }
+        if self.config.stipa_timeout_seconds is not None:
+            stipa_kwargs["timeout_seconds"] = self.config.stipa_timeout_seconds
+        if self.config.acme_poll_timeout_seconds is not None:
+            stipa_kwargs["minimum_token_lifetime_seconds"] = (
+                self.config.acme_poll_timeout_seconds
+            )
         return StipaSettings(
-            base_url=self.config.stipa_url(),
-            user_id=self.config.stipa_user_id,
-            password=self.config.stipa_password,
-            sp_id=self.config.stipa_sp_id,
-            expected_crl_url=self.config.expected_crl_url(),
-            timeout_seconds=self.config.stipa_timeout_seconds,
-            ca=self.config.stipa_ca,
-            minimum_token_lifetime_seconds=self.config.acme_poll_timeout_seconds,
+            **stipa_kwargs,
         )
 
     def certificate_policy(self, generation_id: str) -> ShakenCertificatePolicy:
