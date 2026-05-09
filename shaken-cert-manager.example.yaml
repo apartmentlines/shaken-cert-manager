@@ -1,0 +1,181 @@
+# Enables certificate management. When false, status remains disabled and renew does not issue certificates.
+# Possible values: true, false.
+# enabled: true
+
+# Selects the Peeringhub/STI-PA environment used for ACME issuance and SPC token requests.
+# Possible values: staging, production.
+# peeringhub_environment: production
+
+# Identifies this server in generated certificate generation IDs.
+# Required.
+# server_id:
+
+# STI-PA service provider code authorized for this deployment.
+# Required when enabled is true.
+# stipa_spc:
+
+# STI-PA service provider account ID used in STI-PA token API paths.
+# Defaults to stipa_spc when unset.
+# stipa_sp_id:
+
+# Country for generated SHAKEN certificate subjects.
+# Possible values: US.
+# shaken_subject_country: US
+
+# State for generated SHAKEN certificate subjects.
+# Required when enabled is true.
+# shaken_subject_state:
+
+# Locality/city for generated SHAKEN certificate subjects.
+# Required when enabled is true.
+# shaken_subject_locality:
+
+# Organization for generated SHAKEN certificate subjects.
+# Required when enabled is true unless shaken_subject_organization_template supplies it.
+# shaken_subject_organization:
+
+# Organizational unit for generated SHAKEN certificate subjects.
+# shaken_subject_organizational_unit: VoIP
+
+# Strategy for generating certificate subject CN/O values when templates are not set.
+# Possible values: unique_per_generation, conservative_cn_unique_o.
+# subject_strategy: unique_per_generation
+
+# Python format template for the subject commonName.
+# Available fields: server_id, generation_id, stipa_spc, organization.
+# shaken_subject_common_name_template:
+
+# Python format template for the subject organization.
+# Available fields: server_id, generation_id, stipa_spc, organization.
+# shaken_subject_organization_template:
+
+# STI-PA login user ID for requesting SPC tokens.
+# Required when enabled is true.
+# stipa_user_id:
+
+# STI-PA login password for requesting SPC tokens.
+# Required when enabled is true.
+# stipa_password:
+
+# Overrides the Peeringhub ACME base URL from stir-shaken-toolkit provider defaults.
+# Leave empty for the toolkit default for peeringhub_environment.
+# acme_base_url_override:
+
+# Peeringhub-provided ACME KID/account identifier.
+# Obtain this value from Peeringhub before issuing certificates.
+# Required when enabled is true.
+# acme_kid:
+
+# Directory containing the ACME account key and state cache when explicit paths are not set.
+# account_dir: /var/lib/shaken/account
+
+# ACME account private key path.
+# Defaults to account_dir/account.key when unset.
+# acme_account_key_path:
+
+# ACME account state cache path.
+# Defaults to account_dir/account.json when unset.
+# acme_account_state_path:
+
+# Optional network timeout in seconds for ACME requests.
+# Defaults to stir-shaken-toolkit behavior when unset.
+# acme_timeout_seconds:
+
+# Optional poll interval in seconds while waiting for ACME order status changes.
+# Defaults to stir-shaken-toolkit behavior when unset.
+# acme_poll_interval_seconds:
+
+# Optional maximum seconds to poll an ACME order before treating issuance as failed.
+# Defaults to stir-shaken-toolkit behavior when unset.
+# acme_poll_timeout_seconds:
+
+# Optional number of retries after an ACME badNonce response.
+# Defaults to stir-shaken-toolkit behavior when unset.
+# acme_bad_nonce_retries:
+
+# Overrides the STI-PA base URL from stir-shaken-toolkit provider defaults.
+# Leave empty for the toolkit default for peeringhub_environment.
+# stipa_base_url_override:
+
+# Optional network timeout in seconds for STI-PA requests.
+# Defaults to stir-shaken-toolkit behavior when unset.
+# stipa_timeout_seconds:
+
+# Overrides the STI-PA CRL URL expected in SPC tokens.
+# Leave empty for the toolkit default for peeringhub_environment.
+# stipa_crl_url_override:
+
+# Controls certificate validity dates requested from ACME.
+# Possible values: peeringhub_default, explicit.
+# certificate_lifetime_mode: peeringhub_default
+
+# Requested certificate notBefore timestamp when certificate_lifetime_mode uses explicit dates.
+# Use the timestamp format accepted by stir-shaken-toolkit/Peeringhub ACME.
+# not_before:
+
+# Requested certificate notAfter timestamp when certificate_lifetime_mode uses explicit dates.
+# Use the timestamp format accepted by stir-shaken-toolkit/Peeringhub ACME.
+# not_after:
+
+# Days before certificate expiration when renew should issue a replacement.
+# renew_before_days: 45
+
+# Days before certificate expiration when status should report WARNING.
+# warning_days: 52
+
+# Minimum acceptable issued certificate lifetime in days.
+# Certificates at or below this threshold are treated as unusable for manager status.
+# minimum_certificate_lifetime_days: 21
+
+# Days after expiration to keep archived certificate generations before cleanup.
+# retention_days_after_expiry: 30
+
+# Maximum randomized delay in seconds for scheduled/timer-driven execution.
+# timer_randomized_delay_seconds: 21600
+
+# Optional command executed after a new certificate generation is archived and linked under live/.
+# The hook receives SHAKEN_* environment variables describing the new artifacts.
+# deploy_hook:
+
+# Maximum seconds to allow the deploy hook to run.
+# deploy_hook_timeout_seconds: 60
+
+# Writes additional diagnostics and artifacts useful for failed issuance investigation.
+# Possible values: true, false.
+# write_debug_artifacts: false
+
+# Keeps failed transaction directories for later inspection.
+# Possible values: true, false.
+# retain_failed_transactions: true
+
+# Maximum number of failed transaction directories to retain.
+# max_failed_transactions_retained: 10
+
+# Includes CRL Distribution Points in generated CSRs.
+# Peeringhub issuance currently works with this disabled.
+# Possible values: true, false.
+# include_crl_distribution_points: false
+
+# Base state directory for manager-owned files.
+# state_dir: /var/lib/shaken
+
+# Temporary working directory used during issuance.
+# work_dir: /var/lib/shaken/work
+
+# Archive directory for completed certificate generations.
+# archive_dir: /var/lib/shaken/archive
+
+# Live symlink directory exposing unexpired generations and live/current.
+# live_dir: /var/lib/shaken/live
+
+# Directory for retained failed transactions.
+# failed_dir: /var/lib/shaken/failed
+
+# Path to the active generation manifest.
+# active_manifest_path: /var/lib/shaken/active.json
+
+# Path to the last issuance attempt result.
+# last_attempt_path: /var/lib/shaken/last-attempt.json
+
+# Lock file path used to serialize manager operations.
+# lock_path: /var/lib/shaken/shaken-cert-manager.lock
