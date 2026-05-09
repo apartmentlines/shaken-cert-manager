@@ -1,0 +1,5 @@
+# Run SHAKEN certificate renewal twice daily.
+#
+# Install as /etc/cron.d/shaken-cert-manager and adjust the config path if
+# needed. The renew command exits successfully when no renewal is due.
+0 0,12 * * * root /usr/local/bin/shaken-cert-manager --config /etc/shaken-cert-manager.yaml renew

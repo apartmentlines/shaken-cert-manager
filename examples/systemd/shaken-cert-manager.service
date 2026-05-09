@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew SHAKEN certificate
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/shaken-cert-manager --config /etc/shaken-cert-manager.yaml renew
+PrivateTmp=true
+ProtectSystem=strict
+StateDirectory=shaken
+ReadWritePaths=/var/lib/shaken

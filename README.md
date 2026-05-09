@@ -111,6 +111,8 @@ Do not publish `account.key`.
   defaults, and example setup guidance.
 - [Operations](docs/operations.md): issuance, renewal, activation, cleanup, and
   state inspection workflows.
+- [Automation](docs/automation.md): cron and systemd timer examples for
+  unattended renewal.
 - [Monitoring](docs/monitoring.md): text, JSON, and Nagios status output.
 - [Lifecycle Hooks](docs/hooks.md): pre-activation and deploy hook behavior.
 - [Subject Templates](docs/subject-templates.md): advanced subject common name
