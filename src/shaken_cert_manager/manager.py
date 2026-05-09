@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import secrets
 import shutil
@@ -40,6 +41,8 @@ from shaken_cert_manager.status import (
     WARNING,
 )
 
+LOGGER = logging.getLogger(__name__)
+
 
 class ShakenCertManager:
     """Orchestrate SHAKEN certificate issue, renewal, status, and cleanup."""
@@ -60,6 +63,13 @@ class ShakenCertManager:
         """
 
         result = StatusChecker(self.config).check()
+        LOGGER.debug(
+            "Status command result: code=%s summary=%s json_output=%s nagios=%s",
+            result.code,
+            result.summary,
+            json_output,
+            nagios,
+        )
         if json_output:
             print(
                 json.dumps(
@@ -87,9 +97,19 @@ class ShakenCertManager:
         :rtype: int
         """
 
+        LOGGER.info("Issue-initial command started")
         with FileLock(self.config.lock_path):
             self.prune_live_links()
-            if StatusChecker(self.config).check().code in {OK, WARNING}:
+            result = StatusChecker(self.config).check()
+            if result.code in {OK, WARNING}:
+                LOGGER.info(
+                    "Initial issuance skipped: active certificate already exists"
+                )
+                LOGGER.debug(
+                    "Issue-initial status result: code=%s summary=%s",
+                    result.code,
+                    result.summary,
+                )
                 self.write_last_attempt(
                     "issue-initial",
                     "no_renewal_needed",
@@ -97,6 +117,7 @@ class ShakenCertManager:
                 )
                 return 0
             self.issue_certificate("issue-initial", force=True)
+            LOGGER.info("Issue-initial command completed")
             return 0
 
     def renew(self) -> int:
@@ -106,9 +127,11 @@ class ShakenCertManager:
         :rtype: int
         """
 
+        LOGGER.info("Renew command started")
         with FileLock(self.config.lock_path):
             self.prune_live_links()
             if not self.renewal_required():
+                LOGGER.info("Renewal skipped: active certificate outside renewal window")
                 self.write_last_attempt(
                     "renew",
                     "no_renewal_needed",
@@ -116,6 +139,7 @@ class ShakenCertManager:
                 )
                 return 0
             self.issue_certificate("renew", force=False)
+            LOGGER.info("Renew command completed")
             return 0
 
     def force_renew(self) -> int:
@@ -125,9 +149,11 @@ class ShakenCertManager:
         :rtype: int
         """
 
+        LOGGER.info("Force-renew command started")
         with FileLock(self.config.lock_path):
             self.prune_live_links()
             self.issue_certificate("force-renew", force=True)
+            LOGGER.info("Force-renew command completed")
             return 0
 
     def cleanup(self) -> int:
@@ -137,12 +163,14 @@ class ShakenCertManager:
         :rtype: int
         """
 
+        LOGGER.info("Cleanup command started")
         with FileLock(self.config.lock_path):
             self.prune_live_links()
             active_generation_id = self.active_generation_id()
             cutoff = datetime.now(UTC) - timedelta(
                 days=self.config.retention_days_after_expiry
             )
+            removed_archives = 0
             for manifest_path in self.config.archive_dir.glob("*/manifest.json"):
                 manifest = read_json(manifest_path)
                 generation_id = str(manifest.get("generation_id", ""))
@@ -151,10 +179,19 @@ class ShakenCertManager:
                 not_after = parse_timestamp(str(manifest.get("not_after", "")))
                 if not_after is None or not_after > cutoff:
                     continue
+                LOGGER.info(
+                    "Removing expired inactive archive: generation_id=%s path=%s",
+                    generation_id,
+                    manifest_path.parent,
+                )
                 shutil.rmtree(manifest_path.parent)
+                removed_archives += 1
             self.prune_failed_archives()
             self.prune_live_links()
             self.write_last_attempt("cleanup", "success", "cleanup complete")
+            LOGGER.info(
+                "Cleanup command completed: removed_archives=%s", removed_archives
+            )
             return 0
 
     def clear_lock(self) -> int:
@@ -164,11 +201,14 @@ class ShakenCertManager:
         :rtype: int
         """
 
+        LOGGER.info("Clear-lock command started")
         details = clear_stale_lock(self.config.lock_path)
         if details:
             print(f"cleared stale lock {self.config.lock_path}: {details}")
+            LOGGER.info("Clear-lock command completed: lock_cleared=True")
         else:
             print(f"no lock file exists at {self.config.lock_path}")
+            LOGGER.info("Clear-lock command completed: lock_cleared=False")
         return 0
 
     def renewal_required(self) -> bool:
@@ -180,13 +220,32 @@ class ShakenCertManager:
 
         result = StatusChecker(self.config).check()
         if result.code == CRITICAL:
+            LOGGER.debug(
+                "Renewal required: status_code=%s summary=%s",
+                result.code,
+                result.summary,
+            )
             return True
         if result.code == WARNING:
             days_remaining = result.fields.get("days_remaining")
-            return (
+            required = (
                 isinstance(days_remaining, int)
                 and days_remaining <= self.config.renew_before_days
             )
+            LOGGER.debug(
+                "Renewal warning decision: required=%s days_remaining=%s "
+                + "renew_before_days=%s summary=%s",
+                required,
+                days_remaining,
+                self.config.renew_before_days,
+                result.summary,
+            )
+            return required
+        LOGGER.debug(
+            "Renewal not required: status_code=%s summary=%s",
+            result.code,
+            result.summary,
+        )
         return False
 
     def issue_certificate(self, command: str, force: bool) -> None:
@@ -201,6 +260,7 @@ class ShakenCertManager:
         """
 
         if not self.config.enabled:
+            LOGGER.info("Issuance skipped: SHAKEN certificate management disabled")
             self.write_last_attempt(
                 command, "no_renewal_needed", "SHAKEN certificate management disabled"
             )
@@ -208,20 +268,53 @@ class ShakenCertManager:
         started_at = now_utc()
         generation_id = self.new_generation_id()
         transaction_dir = self.config.work_dir / generation_id
+        LOGGER.info(
+            "Certificate issuance started: command=%s generation_id=%s force=%s",
+            command,
+            generation_id,
+            force,
+        )
+        LOGGER.debug(
+            "Certificate issuance paths: transaction_dir=%s archive_dir=%s "
+            + "live_generation_dir=%s",
+            transaction_dir,
+            self.config.archive_dir / generation_id,
+            self.live_generation_dir(generation_id),
+        )
         transaction_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
         live_generation_created = False
         try:
             self.preflight()
             issuer = self.prepare_peeringhub_issuer(generation_id)
+            LOGGER.debug(
+                "Calling toolkit issuer: generation_id=%s stipa_spc=%s "
+                + "not_before=%s not_after=%s",
+                generation_id,
+                self.config.stipa_spc,
+                self.config.not_before,
+                self.config.not_after,
+            )
             result = issuer.issue(
                 self.config.stipa_spc,
                 not_before=self.config.not_before,
                 not_after=self.config.not_after,
             )
+            LOGGER.debug(
+                "Toolkit issuer returned certificate: generation_id=%s order_url=%s "
+                + "certificate_url=%s",
+                generation_id,
+                result.order_url,
+                result.certificate_url,
+            )
             csr_pem_path = transaction_dir / "csr.pem"
             csr_der_path = transaction_dir / "csr.der"
             atomic_write_bytes(csr_pem_path, result.csr_pem, 0o600)
             atomic_write_bytes(csr_der_path, result.csr_der, 0o600)
+            LOGGER.debug(
+                "Transaction CSR artifacts written: csr_pem_path=%s csr_der_path=%s",
+                csr_pem_path,
+                csr_der_path,
+            )
             archive_dir = self.config.archive_dir / generation_id
             archive_dir.mkdir(parents=True, mode=0o711, exist_ok=False)
             leaf_archive_path = archive_dir / "leaf.pem"
@@ -236,6 +329,12 @@ class ShakenCertManager:
             )
             atomic_write_json(
                 archive_dir / "challenge.json", result.submitted_challenge, 0o600
+            )
+            LOGGER.debug(
+                "Archived issuance artifacts: archive_dir=%s leaf=%s chain=%s",
+                archive_dir,
+                leaf_archive_path,
+                chain_archive_path,
             )
             if result.certificate_details is None:
                 raise ValidationError("issued certificate details are missing")
@@ -255,6 +354,12 @@ class ShakenCertManager:
                 deploy_hook_status="pending",
             )
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
+            LOGGER.debug(
+                "Archive manifest written: path=%s serial_number=%s not_after=%s",
+                archive_dir / "manifest.json",
+                manifest.get("serial_number"),
+                manifest.get("not_after"),
+            )
             self.create_live_generation_links(generation_id, archive_dir)
             live_generation_created = True
             try:
@@ -262,6 +367,11 @@ class ShakenCertManager:
                     archive_dir / "manifest.json"
                 )
             except Exception:
+                LOGGER.warning(
+                    "Deploy hook failed; rolling back live generation links: "
+                    + "generation_id=%s",
+                    generation_id,
+                )
                 self.remove_live_generation_links(generation_id)
                 raise
             manifest["deploy_hook_status"] = deploy_hook_status
@@ -269,7 +379,13 @@ class ShakenCertManager:
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
             self.update_live_current(generation_id)
             atomic_write_json(self.config.active_manifest_path, manifest, 0o600)
+            LOGGER.debug(
+                "Active manifest updated: path=%s generation_id=%s",
+                self.config.active_manifest_path,
+                generation_id,
+            )
             shutil.rmtree(transaction_dir)
+            LOGGER.debug("Transaction directory removed: path=%s", transaction_dir)
             self.write_last_attempt(
                 command,
                 "success",
@@ -277,8 +393,20 @@ class ShakenCertManager:
                 started_at=started_at,
                 generation_id=generation_id,
             )
+            LOGGER.info(
+                "Certificate issuance completed: generation_id=%s archive_dir=%s "
+                + "live_current=%s",
+                generation_id,
+                archive_dir,
+                self.config.live_dir / "current",
+            )
         except IssuanceValidationError as exc:
             if live_generation_created:
+                LOGGER.warning(
+                    "Validation failed; rolling back live generation links: "
+                    + "generation_id=%s",
+                    generation_id,
+                )
                 self.remove_live_generation_links(generation_id)
             self.archive_validation_failure(generation_id, exc.partial_result)
             self.record_failure(
@@ -287,6 +415,11 @@ class ShakenCertManager:
             raise
         except Exception as exc:
             if live_generation_created:
+                LOGGER.warning(
+                    "Issuance failed; rolling back live generation links: "
+                    + "generation_id=%s",
+                    generation_id,
+                )
                 self.remove_live_generation_links(generation_id)
             self.record_failure(
                 command, generation_id, transaction_dir, started_at, exc
@@ -310,14 +443,21 @@ class ShakenCertManager:
             self.config.archive_dir,
         ]
         for directory in private_dirs:
+            LOGGER.debug("Preflight ensuring private directory: path=%s", directory)
             self.ensure_directory_mode(directory, 0o700)
         for directory in traversable_dirs:
+            LOGGER.debug("Preflight ensuring traversable directory: path=%s", directory)
             self.ensure_directory_mode(directory, 0o711)
+        LOGGER.debug("Preflight ensuring live directory: path=%s", self.config.live_dir)
         self.ensure_directory_mode(self.config.live_dir, 0o755)
         if not self.config.acme_account_key_path.exists():
             raise ValidationError(
                 f"ACME account private key is missing: {self.config.acme_account_key_path}"
             )
+        LOGGER.debug(
+            "Preflight completed: acme_account_key_path=%s",
+            self.config.acme_account_key_path,
+        )
 
     def ensure_directory_mode(self, directory: Path, mode: int) -> None:
         """Create a directory and enforce its permissions.
@@ -332,6 +472,7 @@ class ShakenCertManager:
 
         directory.mkdir(parents=True, mode=mode, exist_ok=True)
         os.chmod(directory, mode)
+        LOGGER.debug("Directory mode ensured: path=%s mode=%s", directory, oct(mode))
 
     def run_deploy_hook(self, manifest_path: Path) -> str:
         """Run the configured deploy hook for an archived generation.
@@ -344,9 +485,19 @@ class ShakenCertManager:
         """
 
         if not self.config.deploy_hook:
+            LOGGER.info("Deploy hook disabled")
             return "disabled"
         manifest = read_json(manifest_path)
         environment = self.deploy_hook_environment(manifest_path, manifest)
+        LOGGER.info("Deploy hook started")
+        LOGGER.debug(
+            "Deploy hook invocation: command=%s timeout_seconds=%s manifest_path=%s "
+            + "generation_id=%s",
+            self.config.deploy_hook,
+            self.config.deploy_hook_timeout_seconds,
+            manifest_path,
+            manifest.get("generation_id"),
+        )
         try:
             result = subprocess.run(
                 self.config.deploy_hook,
@@ -359,14 +510,26 @@ class ShakenCertManager:
                 timeout=self.config.deploy_hook_timeout_seconds,
             )
         except subprocess.TimeoutExpired as exc:
+            LOGGER.warning(
+                "Deploy hook timed out: timeout_seconds=%s",
+                self.config.deploy_hook_timeout_seconds,
+            )
             raise ManagerError(
                 f"deploy hook timed out after {self.config.deploy_hook_timeout_seconds} seconds"
             ) from exc
+        LOGGER.debug(
+            "Deploy hook completed: returncode=%s stdout_present=%s stderr_present=%s",
+            result.returncode,
+            bool(result.stdout.strip()),
+            bool(result.stderr.strip()),
+        )
         if result.returncode != 0:
             stderr = result.stderr.strip()
             stdout = result.stdout.strip()
             detail = stderr or stdout or f"exit code {result.returncode}"
+            LOGGER.warning("Deploy hook failed: %s", detail)
             raise ManagerError(f"deploy hook failed: {detail}")
+        LOGGER.info("Deploy hook succeeded")
         return "success"
 
     def deploy_hook_environment(
@@ -415,6 +578,10 @@ class ShakenCertManager:
         }
         for key, value in hook_values.items():
             environment[key] = "" if value is None else str(value)
+        LOGGER.debug(
+            "Deploy hook environment prepared: keys=%s",
+            sorted(hook_values),
+        )
         return environment
 
     def build_manifest(self, **values: Any) -> dict[str, Any]:
@@ -429,6 +596,12 @@ class ShakenCertManager:
         cert_details = values["cert_details"]
         generation_id = str(values["generation_id"])
         subject = self.build_subject(generation_id).to_x509_name().rfc4514_string()
+        LOGGER.debug(
+            "Building manifest: generation_id=%s subject=%s previous_generation_id=%s",
+            generation_id,
+            subject,
+            self.active_generation_id(),
+        )
         return {
             "generation_id": generation_id,
             "server_id": self.config.server_id,
@@ -502,6 +675,12 @@ class ShakenCertManager:
         failed_dir = self.config.failed_dir / generation_id
         if self.config.retain_failed_transactions:
             failed_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+            LOGGER.warning(
+                "Recording failed issuance: generation_id=%s failed_dir=%s error=%s",
+                generation_id,
+                failed_dir,
+                exc,
+            )
             atomic_write_json(
                 failed_dir / "failure.json",
                 {
@@ -513,6 +692,9 @@ class ShakenCertManager:
                 0o600,
             )
         if transaction_dir.exists():
+            LOGGER.debug(
+                "Removing failed transaction directory: path=%s", transaction_dir
+            )
             shutil.rmtree(transaction_dir)
         self.write_last_attempt(
             command,
@@ -523,6 +705,10 @@ class ShakenCertManager:
             active_generation_unchanged=True,
         )
         self.prune_failed_archives()
+        LOGGER.debug(
+            "Failure state recorded: generation_id=%s active_generation_unchanged=True",
+            generation_id,
+        )
 
     def archive_validation_failure(
         self, generation_id: str, result: StirShakenIssuanceResult
@@ -538,9 +724,18 @@ class ShakenCertManager:
         """
 
         if not self.config.retain_failed_transactions:
+            LOGGER.debug(
+                "Validation failure artifacts not retained: generation_id=%s",
+                generation_id,
+            )
             return
         failed_dir = self.config.failed_dir / generation_id
         failed_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
+        LOGGER.warning(
+            "Retaining validation failure artifacts: generation_id=%s failed_dir=%s",
+            generation_id,
+            failed_dir,
+        )
         atomic_write_bytes(failed_dir / "csr.pem", result.csr_pem, 0o600)
         atomic_write_bytes(failed_dir / "csr.der", result.csr_der, 0o600)
         atomic_write_text(failed_dir / "leaf.pem", result.leaf_pem, 0o600)
@@ -571,6 +766,10 @@ class ShakenCertManager:
             },
             0o600,
         )
+        LOGGER.debug(
+            "Validation failure artifact archive completed: generation_id=%s",
+            generation_id,
+        )
 
     def write_last_attempt(
         self,
@@ -599,6 +798,15 @@ class ShakenCertManager:
         :rtype: None
         """
 
+        LOGGER.debug(
+            "Writing last attempt: command=%s result=%s generation_id=%s "
+            + "active_generation_unchanged=%s path=%s",
+            command,
+            result,
+            generation_id,
+            active_generation_unchanged,
+            self.config.last_attempt_path,
+        )
         atomic_write_json(
             self.config.last_attempt_path,
             {
@@ -625,8 +833,16 @@ class ShakenCertManager:
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
+        removed = 0
         for directory in failed_dirs[self.config.max_failed_transactions_retained :]:
+            LOGGER.info("Pruning old failed transaction archive: path=%s", directory)
             shutil.rmtree(directory)
+            removed += 1
+        LOGGER.debug(
+            "Failed transaction pruning completed: retained_limit=%s removed=%s",
+            self.config.max_failed_transactions_retained,
+            removed,
+        )
 
     def prune_live_links(self) -> None:
         """Remove expired or broken live generation symlink trees.
@@ -636,6 +852,7 @@ class ShakenCertManager:
         """
 
         if not self.config.live_dir.exists():
+            LOGGER.debug("Live directory does not exist; skipping prune")
             return
         now = datetime.now(UTC)
         for directory in self.config.live_dir.iterdir():
@@ -646,15 +863,36 @@ class ShakenCertManager:
             generation_id = directory.name
             manifest_path = self.config.archive_dir / generation_id / "manifest.json"
             if not manifest_path.exists():
+                LOGGER.warning(
+                    "Removing live link with missing manifest: generation_id=%s "
+                    + "path=%s manifest_path=%s",
+                    generation_id,
+                    directory,
+                    manifest_path,
+                )
                 self.remove_live_path(directory)
                 continue
             try:
                 manifest = read_json(manifest_path)
             except (OSError, ValueError, json.JSONDecodeError):
+                LOGGER.warning(
+                    "Removing live link with unreadable manifest: generation_id=%s "
+                    + "path=%s manifest_path=%s",
+                    generation_id,
+                    directory,
+                    manifest_path,
+                )
                 self.remove_live_path(directory)
                 continue
             not_after = parse_timestamp(str(manifest.get("not_after", "")))
             if not_after is None or not_after <= now:
+                LOGGER.info(
+                    "Removing expired live generation link: generation_id=%s "
+                    + "path=%s not_after=%s",
+                    generation_id,
+                    directory,
+                    manifest.get("not_after"),
+                )
                 self.remove_live_path(directory)
         self.remove_stale_live_current()
 
@@ -678,12 +916,30 @@ class ShakenCertManager:
         )
         if final_dir.exists() or final_dir.is_symlink():
             raise ValidationError(f"live generation already exists: {final_dir}")
+        LOGGER.debug(
+            "Creating live generation links: generation_id=%s temporary_dir=%s "
+            + "final_dir=%s archive_dir=%s",
+            generation_id,
+            temporary_dir,
+            final_dir,
+            archive_dir,
+        )
         temporary_dir.mkdir(mode=0o755)
         for name in ["leaf.pem", "certificate-chain.pem"]:
             target = archive_dir / name
             link_target = os.path.relpath(target, start=final_dir)
             (temporary_dir / name).symlink_to(link_target)
+            LOGGER.debug(
+                "Created temporary live artifact symlink: path=%s target=%s",
+                temporary_dir / name,
+                link_target,
+            )
         os.replace(temporary_dir, final_dir)
+        LOGGER.info(
+            "Live generation links created: generation_id=%s path=%s",
+            generation_id,
+            final_dir,
+        )
 
     def update_live_current(self, generation_id: str) -> None:
         """Atomically point live/current at a generation directory.
@@ -699,6 +955,11 @@ class ShakenCertManager:
         temporary_path = self.config.live_dir / f".current.{secrets.token_hex(4)}"
         temporary_path.symlink_to(generation_id, target_is_directory=True)
         os.replace(temporary_path, current_path)
+        LOGGER.info(
+            "Live current symlink updated: generation_id=%s path=%s",
+            generation_id,
+            current_path,
+        )
 
     def remove_live_generation_links(self, generation_id: str) -> None:
         """Remove a live symlink tree for a generation.
@@ -709,6 +970,10 @@ class ShakenCertManager:
         :rtype: None
         """
 
+        LOGGER.debug(
+            "Removing live generation links: generation_id=%s",
+            generation_id,
+        )
         self.remove_live_path(self.live_generation_dir(generation_id))
         self.remove_stale_live_current()
 
@@ -721,6 +986,7 @@ class ShakenCertManager:
 
         current_path = self.config.live_dir / "current"
         if current_path.is_symlink() and not current_path.exists():
+            LOGGER.warning("Removing stale live/current symlink: path=%s", current_path)
             current_path.unlink()
 
     def remove_live_path(self, path: Path) -> None:
@@ -733,8 +999,10 @@ class ShakenCertManager:
         """
 
         if path.is_symlink() or path.is_file():
+            LOGGER.debug("Removing live file or symlink: path=%s", path)
             path.unlink(missing_ok=True)
         elif path.is_dir():
+            LOGGER.debug("Removing live directory: path=%s", path)
             shutil.rmtree(path)
 
     def live_generation_dir(self, generation_id: str) -> Path:
@@ -756,10 +1024,18 @@ class ShakenCertManager:
         """
 
         if not self.config.active_manifest_path.exists():
+            LOGGER.debug(
+                "No active manifest exists: path=%s", self.config.active_manifest_path
+            )
             return None
         try:
             return str(read_json(self.config.active_manifest_path).get("generation_id"))
-        except (OSError, ValueError):
+        except (OSError, ValueError) as exc:
+            LOGGER.debug(
+                "Active manifest unreadable: path=%s error=%s",
+                self.config.active_manifest_path,
+                exc,
+            )
             return None
 
     def new_generation_id(self) -> str:
@@ -770,7 +1046,9 @@ class ShakenCertManager:
         """
 
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        return f"{self.config.server_id}-{timestamp}-{secrets.token_hex(5)}"
+        generation_id = f"{self.config.server_id}-{timestamp}-{secrets.token_hex(5)}"
+        LOGGER.debug("Generated certificate generation id: %s", generation_id)
+        return generation_id
 
     def prepare_peeringhub_issuer(self, generation_id: str) -> PeeringhubIssuer:
         """Build a Peeringhub issuer for one certificate generation.
@@ -801,6 +1079,23 @@ class ShakenCertManager:
             issuer_kwargs["acme_poll_timeout_seconds"] = (
                 self.config.acme_poll_timeout_seconds
             )
+        LOGGER.debug(
+            "Prepared Peeringhub issuer settings: generation_id=%s environment=%s "
+            + "acme_base_url=%s account_key_path=%s account_state_path=%s "
+            + "acme_kid_configured=%s acme_timeout_seconds=%s "
+            + "acme_bad_nonce_retries=%s acme_poll_interval_seconds=%s "
+            + "acme_poll_timeout_seconds=%s",
+            generation_id,
+            self.config.peeringhub_environment,
+            self.config.acme_url(),
+            self.config.acme_account_key_path,
+            self.config.acme_account_state_path,
+            bool(self.config.acme_kid),
+            issuer_kwargs.get("acme_timeout_seconds"),
+            issuer_kwargs.get("acme_bad_nonce_retries"),
+            issuer_kwargs.get("acme_poll_interval_seconds"),
+            issuer_kwargs.get("acme_poll_timeout_seconds"),
+        )
         return PeeringhubIssuer.build(**issuer_kwargs)
 
     def stipa_settings(self) -> StipaSettings:
@@ -824,6 +1119,18 @@ class ShakenCertManager:
             stipa_kwargs["minimum_token_lifetime_seconds"] = (
                 self.config.acme_poll_timeout_seconds
             )
+        LOGGER.debug(
+            "Prepared STI-PA settings: base_url=%s sp_id=%s user_id_configured=%s "
+            + "expected_crl_url=%s timeout_seconds=%s ca=%s "
+            + "minimum_token_lifetime_seconds=%s",
+            stipa_kwargs["base_url"],
+            stipa_kwargs["sp_id"],
+            bool(stipa_kwargs["user_id"]),
+            stipa_kwargs["expected_crl_url"],
+            stipa_kwargs.get("timeout_seconds"),
+            stipa_kwargs["ca"],
+            stipa_kwargs.get("minimum_token_lifetime_seconds"),
+        )
         return StipaSettings(
             **stipa_kwargs,
         )
@@ -837,8 +1144,19 @@ class ShakenCertManager:
         :rtype: ShakenCertificatePolicy
         """
 
+        subject = self.build_subject(generation_id)
+        LOGGER.debug(
+            "Prepared certificate policy: generation_id=%s subject=%s "
+            + "expected_crl_url=%s minimum_certificate_lifetime_days=%s "
+            + "include_crl_distribution_points=%s",
+            generation_id,
+            subject.to_x509_name().rfc4514_string(),
+            self.config.expected_crl_url(),
+            self.config.minimum_certificate_lifetime_days,
+            self.config.include_crl_distribution_points,
+        )
         return ShakenCertificatePolicy(
-            subject=self.build_subject(generation_id),
+            subject=subject,
             tn_auth_list_der=TnAuthList(self.config.stipa_spc).der(),
             expected_crl_url=self.config.expected_crl_url(),
             minimum_certificate_lifetime_days=(
@@ -883,7 +1201,7 @@ class ShakenCertManager:
             common_name = (
                 f"SHAKEN {self.config.stipa_spc} {self.config.server_id} {generation_id}"
             )
-        return ShakenSubject(
+        subject = ShakenSubject(
             country=self.config.shaken_subject_country,
             state=self.config.shaken_subject_state,
             locality=self.config.shaken_subject_locality,
@@ -891,6 +1209,15 @@ class ShakenCertManager:
             organizational_unit=self.config.shaken_subject_organizational_unit,
             common_name=common_name,
         )
+        LOGGER.debug(
+            "Built certificate subject: generation_id=%s common_name=%s "
+            + "organization=%s strategy=%s",
+            generation_id,
+            common_name,
+            organization,
+            self.config.subject_strategy,
+        )
+        return subject
 
 
 def render_subject_template(template: str, values: dict[str, str]) -> str:

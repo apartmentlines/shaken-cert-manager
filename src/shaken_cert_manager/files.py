@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,8 @@ from types import TracebackType
 from typing import Any
 
 from shaken_cert_manager.errors import LockError
+
+LOGGER = logging.getLogger(__name__)
 
 
 class FileLock:
@@ -28,11 +31,13 @@ class FileLock:
         """
 
         self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        LOGGER.debug("Acquiring manager lock: path=%s", self.path)
         descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             message = self.lock_held_message()
+            LOGGER.debug("Manager lock is already held: path=%s", self.path)
             os.close(descriptor)
             raise LockError(message) from exc
         self.file_descriptor = descriptor
@@ -40,6 +45,7 @@ class FileLock:
         os.write(
             descriptor, f"pid={os.getpid()} started_at={now_utc()}\n".encode("utf-8")
         )
+        LOGGER.debug("Manager lock acquired: path=%s", self.path)
         return self
 
     def __exit__(
@@ -61,6 +67,7 @@ class FileLock:
         """
 
         if self.file_descriptor is not None:
+            LOGGER.debug("Releasing manager lock: path=%s", self.path)
             fcntl.flock(self.file_descriptor, fcntl.LOCK_UN)
             os.close(self.file_descriptor)
             self.file_descriptor = None
@@ -108,6 +115,7 @@ def clear_stale_lock(path: Path) -> str:
     """
 
     if not path.exists():
+        LOGGER.debug("No stale lock file to clear: path=%s", path)
         return ""
     details = read_lock_file(path)
     try:
@@ -121,8 +129,12 @@ def clear_stale_lock(path: Path) -> str:
             message = f"Cannot clear {path}; another manager process still holds it"
             if details:
                 message = f"{message}: {details}"
+            LOGGER.debug(
+                "Refusing to clear held lock: path=%s details=%s", path, details
+            )
             raise LockError(message) from exc
         path.unlink(missing_ok=True)
+        LOGGER.info("Cleared stale manager lock: path=%s", path)
         return details
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)

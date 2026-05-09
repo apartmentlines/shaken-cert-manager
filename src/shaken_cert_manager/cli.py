@@ -18,6 +18,7 @@ from shaken_cert_manager.manager import ShakenCertManager
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
 YAML_EXTENSIONS = (".yaml", ".yml")
+LOGGER = logging.getLogger(__name__)
 
 
 class ShakenCertManagerCli:
@@ -37,8 +38,20 @@ class ShakenCertManagerCli:
             level=logging.DEBUG if args.debug else logging.INFO,
             format="%(levelname)s %(message)s",
         )
+        LOGGER.debug(
+            "CLI invocation: command=%s config=%s debug=%s",
+            args.command,
+            args.config,
+            args.debug,
+        )
         try:
-            config = ManagerConfig.load(Path(args.config))
+            config_path = Path(args.config)
+            config = ManagerConfig.load(config_path)
+            LOGGER.debug(
+                "Manager config loaded: path=%s summary=%s",
+                config_path,
+                config.sanitized_summary(),
+            )
             manager = ShakenCertManager(config)
             if args.command == "status":
                 return manager.status(nagios=args.nagios, json_output=args.json)
@@ -56,7 +69,8 @@ class ShakenCertManagerCli:
                 return manager.clear_lock()
             raise ManagerError(f"Unsupported command: {args.command}")
         except RuntimeError as exc:
-            logging.error("%s", exc)
+            LOGGER.debug("Command failed with exception", exc_info=True)
+            LOGGER.error("%s", exc)
             return FAILURE_EXIT_CODE
 
     def parse_args(self, argv: list[str] | None) -> argparse.Namespace:

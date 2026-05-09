@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +19,7 @@ OK = 0
 WARNING = 1
 CRITICAL = 2
 UNKNOWN = 3
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -68,14 +70,35 @@ class StatusChecker:
             "peeringhub_environment": self.config.peeringhub_environment,
             "stipa_spc": self.config.stipa_spc,
         }
+        LOGGER.debug(
+            "Status check started: active_manifest_path=%s live_dir=%s enabled=%s",
+            self.config.active_manifest_path,
+            self.config.live_dir,
+            self.config.enabled,
+        )
         if not self.config.enabled:
-            return StatusResult(
-                OK, "SHAKEN certificate management disabled", base_fields
+            result = StatusResult(
+                OK,
+                "SHAKEN certificate management disabled",
+                base_fields,
             )
+            LOGGER.debug(
+                "Status check completed: code=%s summary=%s",
+                result.code,
+                result.summary,
+            )
+            return result
         try:
             manifest = read_json(self.config.active_manifest_path)
             certificate_path = Path(str(manifest["leaf_certificate_path"]))
             key_path = Path(str(manifest["certificate_private_key_path"]))
+            LOGGER.debug(
+                "Status check loading active material: generation_id=%s "
+                + "certificate_path=%s key_path=%s",
+                manifest.get("generation_id"),
+                certificate_path,
+                key_path,
+            )
             certificate = self.certificates.parse_certificate(
                 certificate_path.read_bytes()
             )
@@ -102,27 +125,60 @@ class StatusChecker:
                 "renewal_threshold_days": self.config.renew_before_days,
             }
             if days_remaining <= self.config.minimum_certificate_lifetime_days:
-                return StatusResult(
+                result = StatusResult(
                     CRITICAL, f"certificate expires in {days_remaining} days", fields
                 )
+                LOGGER.debug(
+                    "Status check completed: code=%s summary=%s",
+                    result.code,
+                    result.summary,
+                )
+                return result
             if days_remaining <= self.config.warning_days:
-                return StatusResult(
+                result = StatusResult(
                     WARNING, f"certificate expires in {days_remaining} days", fields
                 )
+                LOGGER.debug(
+                    "Status check completed: code=%s summary=%s",
+                    result.code,
+                    result.summary,
+                )
+                return result
             if self.last_attempt_failed_and_due(days_remaining):
-                return StatusResult(
+                result = StatusResult(
                     WARNING, "last renewal attempt failed while renewal is due", fields
                 )
-            return StatusResult(
-                OK, f"certificate valid for {days_remaining} days", fields
+                LOGGER.debug(
+                    "Status check completed: code=%s summary=%s",
+                    result.code,
+                    result.summary,
+                )
+                return result
+            result = StatusResult(
+                OK,
+                f"certificate valid for {days_remaining} days",
+                fields,
             )
+            LOGGER.debug(
+                "Status check completed: code=%s summary=%s days_remaining=%s",
+                result.code,
+                result.summary,
+                days_remaining,
+            )
+            return result
         except (
             KeyError,
             OSError,
             ValueError,
             ShakenValidationError,
         ) as exc:
-            return StatusResult(CRITICAL, str(exc), base_fields)
+            result = StatusResult(CRITICAL, str(exc), base_fields)
+            LOGGER.debug(
+                "Status check completed: code=%s summary=%s",
+                result.code,
+                result.summary,
+            )
+            return result
 
     def last_attempt_result(self) -> str | None:
         """Return the last attempt result.

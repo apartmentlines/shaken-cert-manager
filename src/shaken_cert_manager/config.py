@@ -12,6 +12,7 @@ from stir_shaken_toolkit.providers.peeringhub import PeeringhubProfile
 
 from shaken_cert_manager.errors import ConfigError
 
+REDACTED_VALUE = "[redacted]"
 ENVIRONMENT_OVERRIDES = {
     "peeringhub_environment": "PEERINGHUB_ENVIRONMENT",
     "server_id": "SHAKEN_SERVER_ID",
@@ -281,6 +282,58 @@ class ManagerConfig:
                 raise ConfigError(
                     f"Missing required enabled configuration fields: {', '.join(missing)}"
                 )
+
+    def sanitized_summary(self) -> dict[str, Any]:
+        """Return a log-safe configuration summary.
+
+        :return: Sanitized configuration values.
+        :rtype: dict[str, Any]
+        """
+
+        return {
+            "enabled": self.enabled,
+            "peeringhub_environment": self.peeringhub_environment,
+            "server_id": self.server_id,
+            "stipa_spc": self.stipa_spc,
+            "stipa_sp_id": self.stipa_sp_id,
+            "stipa_user_id_configured": bool(self.stipa_user_id),
+            "stipa_password": REDACTED_VALUE if self.stipa_password else "",
+            "acme_kid_configured": bool(self.acme_kid),
+            "acme_account_key_path": str(self.acme_account_key_path),
+            "acme_account_state_path": str(self.acme_account_state_path),
+            "acme_base_url": self.acme_url(),
+            "stipa_base_url": self.stipa_url(),
+            "stipa_crl_url": self.expected_crl_url(),
+            "acme_timeout_seconds": self.acme_timeout_seconds,
+            "acme_poll_interval_seconds": self.acme_poll_interval_seconds,
+            "acme_poll_timeout_seconds": self.acme_poll_timeout_seconds,
+            "acme_bad_nonce_retries": self.acme_bad_nonce_retries,
+            "stipa_timeout_seconds": self.stipa_timeout_seconds,
+            "subject_strategy": self.subject_strategy,
+            "renew_before_days": self.renew_before_days,
+            "warning_days": self.warning_days,
+            "minimum_certificate_lifetime_days": (
+                self.minimum_certificate_lifetime_days
+            ),
+            "retention_days_after_expiry": self.retention_days_after_expiry,
+            "deploy_hook_configured": bool(self.deploy_hook),
+            "deploy_hook_timeout_seconds": self.deploy_hook_timeout_seconds,
+            "retain_failed_transactions": self.retain_failed_transactions,
+            "max_failed_transactions_retained": (
+                self.max_failed_transactions_retained
+            ),
+            "include_crl_distribution_points": self.include_crl_distribution_points,
+            "state_dir": str(self.state_dir),
+            "work_dir": str(self.work_dir),
+            "archive_dir": str(self.archive_dir),
+            "live_dir": str(self.live_dir),
+            "failed_dir": str(self.failed_dir),
+            "account_dir": str(self.account_dir),
+            "active_manifest_path": str(self.active_manifest_path),
+            "last_attempt_path": str(self.last_attempt_path),
+            "lock_path": str(self.lock_path),
+        }
+
     def peeringhub_profile(self) -> PeeringhubProfile:
         """Return the configured Peeringhub provider profile.
 
