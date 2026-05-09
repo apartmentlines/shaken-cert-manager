@@ -86,8 +86,8 @@ class StatusChecker:
     """Check active SHAKEN certificate state."""
 
     def __init__(self, config: ManagerConfig) -> None:
-        self.config = config
-        self.certificates = ShakenCertificateManager()
+        self.config: ManagerConfig = config
+        self.certificates: ShakenCertificateManager = ShakenCertificateManager()
 
     def check(self) -> StatusResult:
         """Check active certificate status.
@@ -155,9 +155,7 @@ class StatusChecker:
                 "live_certificate_chain_path": manifest.get(
                     "live_certificate_chain_path"
                 ),
-                "pre_activate_hook_status": manifest.get(
-                    "pre_activate_hook_status"
-                ),
+                "pre_activate_hook_status": manifest.get("pre_activate_hook_status"),
                 "deploy_hook_status": manifest.get("deploy_hook_status"),
                 "last_successful_activation": manifest.get("installed_at"),
                 "last_attempt_result": self.last_attempt_result(),

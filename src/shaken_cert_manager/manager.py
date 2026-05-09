@@ -48,8 +48,8 @@ class ShakenCertManager:
     """Orchestrate SHAKEN certificate issue, renewal, status, and cleanup."""
 
     def __init__(self, config: ManagerConfig) -> None:
-        self.config = config
-        self.certificates = ShakenCertificateManager()
+        self.config: ManagerConfig = config
+        self.certificates: ShakenCertificateManager = ShakenCertificateManager()
 
     def status(self, nagios: bool = False, json_output: bool = False) -> int:
         """Print manager status.
@@ -152,7 +152,9 @@ class ShakenCertManager:
                 return 0
             self.prune_live_links()
             if not self.renewal_required():
-                LOGGER.info("Renewal skipped: active certificate outside renewal window")
+                LOGGER.info(
+                    "Renewal skipped: active certificate outside renewal window"
+                )
                 self.write_last_attempt(
                     "renew",
                     "no_renewal_needed",
@@ -424,9 +426,7 @@ class ShakenCertManager:
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
             atomic_write_json(self.config.active_manifest_path, manifest, 0o600)
             try:
-                deploy_hook_status = self.run_deploy_hook(
-                    archive_dir / "manifest.json"
-                )
+                deploy_hook_status = self.run_deploy_hook(archive_dir / "manifest.json")
             except Exception as exc:
                 deploy_hook_status = "failed"
                 LOGGER.warning("Deploy hook failed after activation: %s", exc)
@@ -530,7 +530,7 @@ class ShakenCertManager:
             if self.config.acme_account_state_path.exists():
                 details = (
                     details
-                    + f". ACME account state cache exists at "
+                    + ". ACME account state cache exists at "
                     + f"{self.config.acme_account_state_path}, but account.json is "
                     + "recoverable cache and cannot replace account.key"
                 )
@@ -728,8 +728,8 @@ class ShakenCertManager:
         except subprocess.TimeoutExpired as exc:
             self.terminate_hook_process_group(process)
             stdout, stderr = process.communicate()
-            exc.stdout = stdout
-            exc.stderr = stderr
+            exc.stdout = stdout.encode("utf-8")
+            exc.stderr = stderr.encode("utf-8")
             raise
         return subprocess.CompletedProcess(
             args=command,
@@ -772,12 +772,25 @@ class ShakenCertManager:
         :rtype: None
         """
 
-        stdout = (exc.stdout or "").strip()
-        stderr = (exc.stderr or "").strip()
+        stdout = self.timeout_output_text(exc.stdout).strip()
+        stderr = self.timeout_output_text(exc.stderr).strip()
         if stdout:
             LOGGER.debug("%s timed out with stdout:\n%s", hook_name, stdout)
         if stderr:
             LOGGER.debug("%s timed out with stderr:\n%s", hook_name, stderr)
+
+    def timeout_output_text(self, output: bytes | None) -> str:
+        """Decode captured timeout output for logging.
+
+        :param output: Captured timeout output.
+        :type output: bytes | None
+        :return: Decoded output.
+        :rtype: str
+        """
+
+        if output is None:
+            return ""
+        return output.decode("utf-8", errors="replace")
 
     def hook_environment(
         self,
@@ -800,9 +813,7 @@ class ShakenCertManager:
         environment = dict(os.environ)
         archive_dir = manifest_path.parent
         subject = self.build_subject(str(manifest["generation_id"]))
-        live_generation_dir = self.live_generation_dir(
-            str(manifest["generation_id"])
-        )
+        live_generation_dir = self.live_generation_dir(str(manifest["generation_id"]))
         hook_values = {
             "SHAKEN_GENERATION_ID": manifest.get("generation_id"),
             "SHAKEN_ENVIRONMENT": manifest.get("peeringhub_environment"),
@@ -837,8 +848,7 @@ class ShakenCertManager:
             hook_values.update(
                 {
                     "SHAKEN_LIVE_CURRENT_DIR": live_current_dir,
-                    "SHAKEN_LIVE_CURRENT_LEAF_CERT_PATH": live_current_dir
-                    / "leaf.pem",
+                    "SHAKEN_LIVE_CURRENT_LEAF_CERT_PATH": live_current_dir / "leaf.pem",
                     "SHAKEN_LIVE_CURRENT_CHAIN_CERT_PATH": live_current_dir
                     / "certificate-chain.pem",
                 }
@@ -1014,9 +1024,7 @@ class ShakenCertManager:
         atomic_write_bytes(failed_dir / "csr.pem", result.csr_pem, 0o600)
         atomic_write_bytes(failed_dir / "csr.der", result.csr_der, 0o600)
         atomic_write_text(failed_dir / "leaf.pem", result.leaf_pem, 0o600)
-        atomic_write_text(
-            failed_dir / "certificate-chain.pem", result.chain_pem, 0o600
-        )
+        atomic_write_text(failed_dir / "certificate-chain.pem", result.chain_pem, 0o600)
         atomic_write_json(failed_dir / "order.json", result.valid_order, 0o600)
         atomic_write_json(
             failed_dir / "authorization.json", result.authorization, 0o600
@@ -1335,26 +1343,26 @@ class ShakenCertManager:
         :rtype: PeeringhubIssuer
         """
 
-        issuer_kwargs = {
-            "profile": self.config.peeringhub_profile(),
-            "account_key_path": self.config.acme_account_key_path,
-            "account_state_path": self.config.acme_account_state_path,
-            "acme_kid": self.config.acme_kid,
-            "stipa_settings": self.stipa_settings(),
-            "certificate_policy": self.certificate_policy(generation_id),
-        }
-        if self.config.acme_timeout_seconds is not None:
-            issuer_kwargs["acme_timeout_seconds"] = self.config.acme_timeout_seconds
-        if self.config.acme_bad_nonce_retries is not None:
-            issuer_kwargs["acme_bad_nonce_retries"] = self.config.acme_bad_nonce_retries
-        if self.config.acme_poll_interval_seconds is not None:
-            issuer_kwargs["acme_poll_interval_seconds"] = (
-                self.config.acme_poll_interval_seconds
-            )
-        if self.config.acme_poll_timeout_seconds is not None:
-            issuer_kwargs["acme_poll_timeout_seconds"] = (
-                self.config.acme_poll_timeout_seconds
-            )
+        acme_timeout_seconds = (
+            self.config.acme_timeout_seconds
+            if self.config.acme_timeout_seconds is not None
+            else 30
+        )
+        acme_bad_nonce_retries = (
+            self.config.acme_bad_nonce_retries
+            if self.config.acme_bad_nonce_retries is not None
+            else 2
+        )
+        acme_poll_interval_seconds = (
+            self.config.acme_poll_interval_seconds
+            if self.config.acme_poll_interval_seconds is not None
+            else 5
+        )
+        acme_poll_timeout_seconds = (
+            self.config.acme_poll_timeout_seconds
+            if self.config.acme_poll_timeout_seconds is not None
+            else 180
+        )
         LOGGER.debug(
             "Prepared Peeringhub issuer settings: generation_id=%s environment=%s "
             + "acme_base_url=%s account_key_path=%s account_state_path=%s "
@@ -1367,12 +1375,23 @@ class ShakenCertManager:
             self.config.acme_account_key_path,
             self.config.acme_account_state_path,
             bool(self.config.acme_kid),
-            issuer_kwargs.get("acme_timeout_seconds"),
-            issuer_kwargs.get("acme_bad_nonce_retries"),
-            issuer_kwargs.get("acme_poll_interval_seconds"),
-            issuer_kwargs.get("acme_poll_timeout_seconds"),
+            acme_timeout_seconds,
+            acme_bad_nonce_retries,
+            acme_poll_interval_seconds,
+            acme_poll_timeout_seconds,
         )
-        return PeeringhubIssuer.build(**issuer_kwargs)
+        return PeeringhubIssuer.build(
+            profile=self.config.peeringhub_profile(),
+            account_key_path=self.config.acme_account_key_path,
+            account_state_path=self.config.acme_account_state_path,
+            acme_kid=self.config.acme_kid,
+            stipa_settings=self.stipa_settings(),
+            certificate_policy=self.certificate_policy(generation_id),
+            acme_timeout_seconds=acme_timeout_seconds,
+            acme_bad_nonce_retries=acme_bad_nonce_retries,
+            acme_poll_interval_seconds=acme_poll_interval_seconds,
+            acme_poll_timeout_seconds=acme_poll_timeout_seconds,
+        )
 
     def prepare_peeringhub_account_issuer(self) -> PeeringhubIssuer:
         """Build a Peeringhub issuer for ACME account state refresh.
@@ -1381,17 +1400,16 @@ class ShakenCertManager:
         :rtype: PeeringhubIssuer
         """
 
-        issuer_kwargs = {
-            "environment": self.config.peeringhub_environment,
-            "acme_base_url": self.config.acme_url(),
-            "account_key_path": self.config.acme_account_key_path,
-            "account_state_path": self.config.acme_account_state_path,
-            "acme_kid": self.config.acme_kid,
-        }
-        if self.config.acme_timeout_seconds is not None:
-            issuer_kwargs["timeout_seconds"] = self.config.acme_timeout_seconds
-        if self.config.acme_bad_nonce_retries is not None:
-            issuer_kwargs["bad_nonce_retries"] = self.config.acme_bad_nonce_retries
+        timeout_seconds = (
+            self.config.acme_timeout_seconds
+            if self.config.acme_timeout_seconds is not None
+            else 30
+        )
+        bad_nonce_retries = (
+            self.config.acme_bad_nonce_retries
+            if self.config.acme_bad_nonce_retries is not None
+            else 2
+        )
         LOGGER.debug(
             "Prepared Peeringhub account issuer settings: environment=%s "
             + "acme_base_url=%s account_key_path=%s account_state_path=%s "
@@ -1401,10 +1419,18 @@ class ShakenCertManager:
             self.config.acme_account_key_path,
             self.config.acme_account_state_path,
             bool(self.config.acme_kid),
-            issuer_kwargs.get("timeout_seconds"),
-            issuer_kwargs.get("bad_nonce_retries"),
+            timeout_seconds,
+            bad_nonce_retries,
         )
-        return PeeringhubIssuer.for_account_status(**issuer_kwargs)
+        return PeeringhubIssuer.for_account_status(
+            environment=self.config.peeringhub_environment,
+            acme_base_url=self.config.acme_url(),
+            account_key_path=self.config.acme_account_key_path,
+            account_state_path=self.config.acme_account_state_path,
+            acme_kid=self.config.acme_kid,
+            timeout_seconds=timeout_seconds,
+            bad_nonce_retries=bad_nonce_retries,
+        )
 
     def stipa_settings(self) -> StipaSettings:
         """Build reusable STI-PA settings from manager configuration.
@@ -1413,34 +1439,37 @@ class ShakenCertManager:
         :rtype: StipaSettings
         """
 
-        stipa_kwargs = {
-            "base_url": self.config.stipa_url(),
-            "user_id": self.config.stipa_user_id,
-            "password": self.config.stipa_password,
-            "sp_id": self.config.stipa_sp_id,
-            "expected_crl_url": self.config.expected_crl_url(),
-            "ca": False,
-        }
-        if self.config.stipa_timeout_seconds is not None:
-            stipa_kwargs["timeout_seconds"] = self.config.stipa_timeout_seconds
-        if self.config.acme_poll_timeout_seconds is not None:
-            stipa_kwargs["minimum_token_lifetime_seconds"] = (
-                self.config.acme_poll_timeout_seconds
-            )
+        timeout_seconds = (
+            self.config.stipa_timeout_seconds
+            if self.config.stipa_timeout_seconds is not None
+            else 30
+        )
+        minimum_token_lifetime_seconds = (
+            self.config.acme_poll_timeout_seconds
+            if self.config.acme_poll_timeout_seconds is not None
+            else 180
+        )
         LOGGER.debug(
             "Prepared STI-PA settings: base_url=%s sp_id=%s user_id_configured=%s "
             + "expected_crl_url=%s timeout_seconds=%s ca=%s "
             + "minimum_token_lifetime_seconds=%s",
-            stipa_kwargs["base_url"],
-            stipa_kwargs["sp_id"],
-            bool(stipa_kwargs["user_id"]),
-            stipa_kwargs["expected_crl_url"],
-            stipa_kwargs.get("timeout_seconds"),
-            stipa_kwargs["ca"],
-            stipa_kwargs.get("minimum_token_lifetime_seconds"),
+            self.config.stipa_url(),
+            self.config.stipa_sp_id,
+            bool(self.config.stipa_user_id),
+            self.config.expected_crl_url(),
+            timeout_seconds,
+            False,
+            minimum_token_lifetime_seconds,
         )
         return StipaSettings(
-            **stipa_kwargs,
+            base_url=self.config.stipa_url(),
+            user_id=self.config.stipa_user_id,
+            password=self.config.stipa_password,
+            sp_id=self.config.stipa_sp_id,
+            expected_crl_url=self.config.expected_crl_url(),
+            timeout_seconds=timeout_seconds,
+            ca=False,
+            minimum_token_lifetime_seconds=minimum_token_lifetime_seconds,
         )
 
     def certificate_policy(self, generation_id: str) -> ShakenCertificatePolicy:
@@ -1498,9 +1527,7 @@ class ShakenCertManager:
         elif self.config.subject_strategy == "conservative_cn_unique_o":
             common_name = f"SHAKEN {self.config.stipa_spc}"
         else:
-            common_name = (
-                f"SHAKEN {self.config.stipa_spc} {self.config.server_id} {generation_id}"
-            )
+            common_name = f"SHAKEN {self.config.stipa_spc} {self.config.server_id} {generation_id}"
         subject = ShakenSubject(
             country=self.config.shaken_subject_country,
             state=self.config.shaken_subject_state,

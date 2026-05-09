@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, cast
 
 import yaml
 from stir_shaken_toolkit.providers.peeringhub import PeeringhubProfile
@@ -233,7 +234,9 @@ class ManagerConfig:
             ),
             account_dir=account_dir,
             active_manifest_path=Path(
-                string_value(data, "active_manifest_path", str(state_dir / "active.json"))
+                string_value(
+                    data, "active_manifest_path", str(state_dir / "active.json")
+                )
             ),
             last_attempt_path=Path(
                 string_value(
@@ -319,9 +322,7 @@ class ManagerConfig:
             "deploy_hook_configured": bool(self.deploy_hook),
             "deploy_hook_timeout_seconds": self.deploy_hook_timeout_seconds,
             "retain_failed_transactions": self.retain_failed_transactions,
-            "max_failed_transactions_retained": (
-                self.max_failed_transactions_retained
-            ),
+            "max_failed_transactions_retained": (self.max_failed_transactions_retained),
             "include_crl_distribution_points": self.include_crl_distribution_points,
             "state_dir": str(self.state_dir),
             "work_dir": str(self.work_dir),
@@ -407,8 +408,8 @@ class ConfigValueResolver:
         :type env: Mapping[str, str]
         """
 
-        self.data = data
-        self.env = env
+        self.data: dict[str, Any] = data
+        self.env: Mapping[str, str] = env
 
     def value(self, key: str, default: object = None) -> object:
         """Resolve one value.
@@ -468,7 +469,7 @@ class ConfigValueResolver:
 
         value = self.value(key, default)
         try:
-            return int(value)
+            return int(cast(Any, value))
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"{key} must be an integer") from exc
 
@@ -486,7 +487,7 @@ class ConfigValueResolver:
         if self.is_blank(value):
             return None
         try:
-            return int(value)
+            return int(cast(Any, value))
         except (TypeError, ValueError) as exc:
             raise ConfigError(f"{key} must be an integer") from exc
 

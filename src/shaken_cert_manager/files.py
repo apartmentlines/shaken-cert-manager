@@ -20,7 +20,7 @@ class FileLock:
     """Exclusive file lock for mutating manager commands."""
 
     def __init__(self, path: Path) -> None:
-        self.path = path
+        self.path: Path = path
         self.file_descriptor: int | None = None
         self.metadata: str = ""
 
@@ -85,7 +85,9 @@ class FileLock:
         except FileNotFoundError:
             return
         except OSError as exc:
-            LOGGER.warning("Unable to inspect released lock file %s: %s", self.path, exc)
+            LOGGER.warning(
+                "Unable to inspect released lock file %s: %s", self.path, exc
+            )
             return
         try:
             try:

@@ -156,10 +156,13 @@ class ShakenCertManagerCli:
         if skip_confirm:
             return
         if not sys.stdin.isatty():
-            raise ManagerError("force-renew requires --skip-confirm when non-interactive")
+            raise ManagerError(
+                "force-renew requires --skip-confirm when non-interactive"
+            )
         answer = input("Force certificate renewal now? Type 'yes' to continue: ")
         if answer != "yes":
             raise ManagerError("force-renew cancelled")
+
 
 def main() -> int:
     """Run the CLI entry point.
