@@ -20,7 +20,6 @@ from stir_shaken_acme import (
     StirShakenIssuanceResult,
     TnAuthList,
 )
-from stir_shaken_acme.errors import ShakenValidationError
 from stir_shaken_toolkit.providers.peeringhub import PeeringhubIssuer
 
 from shaken_cert_manager.config import ManagerConfig
@@ -37,7 +36,6 @@ from shaken_cert_manager.status import (
     CRITICAL,
     OK,
     StatusChecker,
-    StatusResult,
     WARNING,
 )
 
@@ -135,34 +133,6 @@ class ShakenCertManager:
         with FileLock(self.config.lock_path, wait_lock):
             self.prune_live_links()
             self.issue_certificate("force-renew", force=True)
-            return 0
-
-    def account_status(self, wait_lock: bool = False) -> int:
-        """Verify ACME account status without issuing a certificate.
-
-        :param wait_lock: Wait for manager lock.
-        :type wait_lock: bool
-        :return: Exit code.
-        :rtype: int
-        """
-
-        with FileLock(self.config.lock_path, wait_lock):
-            account_status_kwargs = {
-                "environment": self.config.peeringhub_environment,
-                "acme_base_url": self.config.acme_url(),
-                "account_key_path": self.config.acme_account_key_path,
-                "account_state_path": self.config.acme_account_state_path,
-                "acme_kid": self.config.acme_kid,
-            }
-            if self.config.acme_timeout_seconds is not None:
-                account_status_kwargs["timeout_seconds"] = (
-                    self.config.acme_timeout_seconds
-                )
-            if self.config.acme_bad_nonce_retries is not None:
-                account_status_kwargs["bad_nonce_retries"] = (
-                    self.config.acme_bad_nonce_retries
-                )
-            PeeringhubIssuer.for_account_status(**account_status_kwargs).prepare_account()
             return 0
 
     def cleanup(self, wait_lock: bool = False) -> int:
@@ -497,40 +467,6 @@ class ShakenCertManager:
             "deploy_hook": self.config.deploy_hook,
             "deploy_hook_status": values["deploy_hook_status"],
         }
-
-    def validate_key_cert_pair(
-        self, key_path: Path, certificate_path: Path
-    ) -> StatusResult:
-        """Validate a specific key and certificate pair.
-
-        :param key_path: Key path.
-        :type key_path: Path
-        :param certificate_path: Certificate path.
-        :type certificate_path: Path
-        :return: Status result.
-        :rtype: StatusResult
-        """
-
-        try:
-            private_key = self.certificates.load_certificate_key(key_path)
-            certificate = self.certificates.parse_certificate(
-                certificate_path.read_bytes()
-            )
-            self.certificates.require_key_match(certificate, private_key)
-            return StatusResult(
-                OK,
-                "key and certificate match",
-                {
-                    "key_path": str(key_path),
-                    "certificate_path": str(certificate_path),
-                },
-            )
-        except (OSError, ValidationError, ShakenValidationError, ValueError) as exc:
-            return StatusResult(
-                CRITICAL,
-                str(exc),
-                {"key_path": str(key_path), "certificate_path": str(certificate_path)},
-            )
 
     def record_failure(
         self,

@@ -46,14 +46,6 @@ class ShakenCertManagerCli:
                 return manager.issue_initial(wait_lock=args.wait_lock)
             if args.command == "cleanup":
                 return manager.cleanup(wait_lock=args.wait_lock)
-            if args.command == "account-status":
-                return manager.account_status(wait_lock=args.wait_lock)
-            if args.command == "validate":
-                result = manager.validate_key_cert_pair(
-                    Path(args.key), Path(args.certificate)
-                )
-                print(result.summary)
-                return result.code
             raise ManagerError(f"Unsupported command: {args.command}")
         except RuntimeError as exc:
             logging.error("%s", exc)
@@ -109,19 +101,6 @@ class ShakenCertManagerCli:
         )
         cleanup_parser.add_argument(
             "--wait-lock", action="store_true", help="Wait for an existing manager lock"
-        )
-        account_parser = subparsers.add_parser(
-            "account-status", help="Verify ACME account status"
-        )
-        account_parser.add_argument(
-            "--wait-lock", action="store_true", help="Wait for an existing manager lock"
-        )
-        validate_parser = subparsers.add_parser(
-            "validate", help="Validate a key/certificate pair"
-        )
-        validate_parser.add_argument("--key", required=True, help="Private key path")
-        validate_parser.add_argument(
-            "--certificate", required=True, help="Certificate path"
         )
         return parser.parse_args(argv)
 
