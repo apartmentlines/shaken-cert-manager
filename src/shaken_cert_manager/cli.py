@@ -6,6 +6,10 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
+
+import argcomplete
+from argcomplete.completers import FilesCompleter
 
 from shaken_cert_manager.config import ManagerConfig
 from shaken_cert_manager.errors import ManagerError
@@ -13,6 +17,7 @@ from shaken_cert_manager.manager import ShakenCertManager
 
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
+YAML_EXTENSIONS = (".yaml", ".yml")
 
 
 class ShakenCertManagerCli:
@@ -38,14 +43,17 @@ class ShakenCertManagerCli:
             if args.command == "status":
                 return manager.status(nagios=args.nagios, json_output=args.json)
             if args.command == "renew":
-                return manager.renew(wait_lock=args.wait_lock)
+                return manager.renew()
             if args.command == "force-renew":
                 self.confirm_force_renew(args.skip_confirm)
-                return manager.force_renew(wait_lock=args.wait_lock)
+                return manager.force_renew()
             if args.command == "issue-initial":
-                return manager.issue_initial(wait_lock=args.wait_lock)
+                return manager.issue_initial()
             if args.command == "cleanup":
-                return manager.cleanup(wait_lock=args.wait_lock)
+                return manager.cleanup()
+            if args.command == "clear-lock":
+                self.confirm_clear_lock(args.skip_confirm)
+                return manager.clear_lock()
             raise ManagerError(f"Unsupported command: {args.command}")
         except RuntimeError as exc:
             logging.error("%s", exc)
@@ -63,7 +71,13 @@ class ShakenCertManagerCli:
         parser = argparse.ArgumentParser(
             description="SHAKEN certificate issuance and renewal manager"
         )
-        parser.add_argument("--config", required=True, help="Manager YAML config path")
+        self.add_file_argument(
+            parser,
+            "--config",
+            required=True,
+            help="Manager YAML config path",
+            extensions=YAML_EXTENSIONS,
+        )
         parser.add_argument("--debug", action="store_true", help="Enable debug logging")
         subparsers = parser.add_subparsers(dest="command", required=True)
         status_parser = subparsers.add_parser(
@@ -75,34 +89,55 @@ class ShakenCertManagerCli:
         status_parser.add_argument(
             "--nagios", action="store_true", help="Print Nagios plugin status"
         )
-        renew_parser = subparsers.add_parser(
-            "renew", help="Renew if policy requires it"
-        )
-        renew_parser.add_argument(
-            "--wait-lock", action="store_true", help="Wait for an existing manager lock"
-        )
+        subparsers.add_parser("renew", help="Renew if policy requires it")
         force_parser = subparsers.add_parser("force-renew", help="Force a renewal")
-        force_parser.add_argument(
-            "--wait-lock", action="store_true", help="Wait for an existing manager lock"
-        )
         force_parser.add_argument(
             "--skip-confirm",
             action="store_true",
             help="Run force-renew without interactive confirmation",
         )
-        initial_parser = subparsers.add_parser(
+        subparsers.add_parser(
             "issue-initial", help="Issue only when no active certificate exists"
         )
-        initial_parser.add_argument(
-            "--wait-lock", action="store_true", help="Wait for an existing manager lock"
+        subparsers.add_parser("cleanup", help="Remove expired inactive material")
+        clear_lock_parser = subparsers.add_parser(
+            "clear-lock", help="Clear a stale manager lock"
         )
-        cleanup_parser = subparsers.add_parser(
-            "cleanup", help="Remove expired inactive material"
+        clear_lock_parser.add_argument(
+            "--skip-confirm",
+            action="store_true",
+            help="Clear a stale lock without interactive confirmation",
         )
-        cleanup_parser.add_argument(
-            "--wait-lock", action="store_true", help="Wait for an existing manager lock"
-        )
+        argcomplete.autocomplete(parser)
         return parser.parse_args(argv)
+
+    def add_file_argument(
+        self,
+        parser: argparse.ArgumentParser,
+        *flags: str,
+        help: str,
+        extensions: tuple[str, ...],
+        **kwargs: Any,
+    ) -> argparse.Action:
+        """Add a file path argument with shell completion metadata.
+
+        :param parser: Parser receiving the argument.
+        :type parser: argparse.ArgumentParser
+        :param flags: CLI flags for the argument.
+        :type flags: str
+        :param help: Help text for the argument.
+        :type help: str
+        :param extensions: File extensions to complete.
+        :type extensions: tuple[str, ...]
+        :param kwargs: Additional argparse keyword arguments.
+        :type kwargs: Any
+        :return: Added argparse action.
+        :rtype: argparse.Action
+        """
+
+        action = parser.add_argument(*flags, help=help, **kwargs)
+        setattr(action, "completer", FilesCompleter(allowednames=extensions))
+        return action
 
     def confirm_force_renew(self, skip_confirm: bool) -> None:
         """Confirm an explicit force renewal.
@@ -121,6 +156,24 @@ class ShakenCertManagerCli:
         answer = input("Force certificate renewal now? Type 'yes' to continue: ")
         if answer != "yes":
             raise ManagerError("force-renew cancelled")
+
+    def confirm_clear_lock(self, skip_confirm: bool) -> None:
+        """Confirm lock removal.
+
+        :param skip_confirm: Skip interactive confirmation.
+        :type skip_confirm: bool
+        :return: None.
+        :rtype: None
+        :raises ManagerError: If confirmation is refused or unavailable.
+        """
+
+        if skip_confirm:
+            return
+        if not sys.stdin.isatty():
+            raise ManagerError("clear-lock requires --skip-confirm when non-interactive")
+        answer = input("Clear stale shaken-cert-manager lock? Type 'yes' to continue: ")
+        if answer != "yes":
+            raise ManagerError("clear-lock cancelled")
 
 
 def main() -> int:

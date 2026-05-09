@@ -29,6 +29,7 @@ from shaken_cert_manager.files import (
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
+    clear_stale_lock,
     now_utc,
     read_json,
 )
@@ -79,16 +80,14 @@ class ShakenCertManager:
                 print(f"{key}: {value}")
         return result.code
 
-    def issue_initial(self, wait_lock: bool = False) -> int:
+    def issue_initial(self) -> int:
         """Issue an initial certificate when none is active.
 
-        :param wait_lock: Wait for manager lock.
-        :type wait_lock: bool
         :return: Exit code.
         :rtype: int
         """
 
-        with FileLock(self.config.lock_path, wait_lock):
+        with FileLock(self.config.lock_path):
             self.prune_live_links()
             if StatusChecker(self.config).check().code in {OK, WARNING}:
                 self.write_last_attempt(
@@ -100,16 +99,14 @@ class ShakenCertManager:
             self.issue_certificate("issue-initial", force=True)
             return 0
 
-    def renew(self, wait_lock: bool = False) -> int:
+    def renew(self) -> int:
         """Renew only when policy requires it.
 
-        :param wait_lock: Wait for manager lock.
-        :type wait_lock: bool
         :return: Exit code.
         :rtype: int
         """
 
-        with FileLock(self.config.lock_path, wait_lock):
+        with FileLock(self.config.lock_path):
             self.prune_live_links()
             if not self.renewal_required():
                 self.write_last_attempt(
@@ -121,30 +118,26 @@ class ShakenCertManager:
             self.issue_certificate("renew", force=False)
             return 0
 
-    def force_renew(self, wait_lock: bool = False) -> int:
+    def force_renew(self) -> int:
         """Force a certificate renewal.
 
-        :param wait_lock: Wait for manager lock.
-        :type wait_lock: bool
         :return: Exit code.
         :rtype: int
         """
 
-        with FileLock(self.config.lock_path, wait_lock):
+        with FileLock(self.config.lock_path):
             self.prune_live_links()
             self.issue_certificate("force-renew", force=True)
             return 0
 
-    def cleanup(self, wait_lock: bool = False) -> int:
+    def cleanup(self) -> int:
         """Remove expired inactive archives and old failed archives.
 
-        :param wait_lock: Wait for manager lock.
-        :type wait_lock: bool
         :return: Exit code.
         :rtype: int
         """
 
-        with FileLock(self.config.lock_path, wait_lock):
+        with FileLock(self.config.lock_path):
             self.prune_live_links()
             active_generation_id = self.active_generation_id()
             cutoff = datetime.now(UTC) - timedelta(
@@ -163,6 +156,20 @@ class ShakenCertManager:
             self.prune_live_links()
             self.write_last_attempt("cleanup", "success", "cleanup complete")
             return 0
+
+    def clear_lock(self) -> int:
+        """Clear a stale manager lock file.
+
+        :return: Exit code.
+        :rtype: int
+        """
+
+        details = clear_stale_lock(self.config.lock_path)
+        if details:
+            print(f"cleared stale lock {self.config.lock_path}: {details}")
+        else:
+            print(f"no lock file exists at {self.config.lock_path}")
+        return 0
 
     def renewal_required(self) -> bool:
         """Return whether a renewal is required.

@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "SHAKEN certificate issuance and renewal lifecycle manager"
 requires-python = ">=3.10"
 dependencies = [
+  "argcomplete>=3",
   "cryptography>=41",
   "PyYAML>=6.0",
   # "stir-shaken-toolkit",

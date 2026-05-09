@@ -16,9 +16,8 @@ from shaken_cert_manager.errors import LockError
 class FileLock:
     """Exclusive file lock for mutating manager commands."""
 
-    def __init__(self, path: Path, wait: bool = False) -> None:
+    def __init__(self, path: Path) -> None:
         self.path = path
-        self.wait = wait
         self.file_descriptor: int | None = None
 
     def __enter__(self) -> FileLock:
@@ -30,14 +29,12 @@ class FileLock:
 
         self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
         descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        flags = fcntl.LOCK_EX if self.wait else fcntl.LOCK_EX | fcntl.LOCK_NB
         try:
-            fcntl.flock(descriptor, flags)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
+            message = self.lock_held_message()
             os.close(descriptor)
-            raise LockError(
-                f"Another shaken-cert-manager process holds {self.path}"
-            ) from exc
+            raise LockError(message) from exc
         self.file_descriptor = descriptor
         os.ftruncate(descriptor, 0)
         os.write(
@@ -67,6 +64,69 @@ class FileLock:
             fcntl.flock(self.file_descriptor, fcntl.LOCK_UN)
             os.close(self.file_descriptor)
             self.file_descriptor = None
+
+    def lock_held_message(self) -> str:
+        """Return an informative lock contention message.
+
+        :return: Lock contention message.
+        :rtype: str
+        """
+
+        details = read_lock_file(self.path)
+        message = f"Another shaken-cert-manager process holds {self.path}"
+        if details:
+            message = f"{message}: {details}"
+        return (
+            f"{message}. If no manager process is running, clear the stale lock "
+            "with: shaken-cert-manager --config <config.yaml> clear-lock"
+        )
+
+
+def read_lock_file(path: Path) -> str:
+    """Read lock metadata if it exists.
+
+    :param path: Lock path.
+    :type path: Path
+    :return: Lock metadata.
+    :rtype: str
+    """
+
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return ""
+
+
+def clear_stale_lock(path: Path) -> str:
+    """Clear a lock file only when no process currently holds it.
+
+    :param path: Lock path.
+    :type path: Path
+    :return: Cleared lock metadata.
+    :rtype: str
+    :raises LockError: If the lock is currently held.
+    """
+
+    if not path.exists():
+        return ""
+    details = read_lock_file(path)
+    try:
+        descriptor = os.open(path, os.O_RDWR)
+    except FileNotFoundError:
+        return ""
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            message = f"Cannot clear {path}; another manager process still holds it"
+            if details:
+                message = f"{message}: {details}"
+            raise LockError(message) from exc
+        path.unlink(missing_ok=True)
+        return details
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def now_utc() -> str:
