@@ -26,7 +26,6 @@ ENVIRONMENT_OVERRIDES = {
     "shaken_subject_organization": "SHAKEN_SUBJECT_ORGANIZATION",
     "shaken_subject_organizational_unit": "SHAKEN_SUBJECT_ORGANIZATIONAL_UNIT",
     "shaken_subject_common_name_template": "SHAKEN_SUBJECT_COMMON_NAME_TEMPLATE",
-    "shaken_subject_organization_template": "SHAKEN_SUBJECT_ORGANIZATION_TEMPLATE",
     "subject_strategy": "SHAKEN_SUBJECT_STRATEGY",
     "acme_base_url_override": "PEERINGHUB_ACME_BASE_URL_OVERRIDE",
     "acme_kid": "ACME_KID",
@@ -59,7 +58,6 @@ class ManagerConfig:
     shaken_subject_organizational_unit: str
     subject_strategy: str
     shaken_subject_common_name_template: str
-    shaken_subject_organization_template: str
     acme_base_url_override: str | None
     acme_kid: str
     acme_account_key_path: Path
@@ -78,7 +76,8 @@ class ManagerConfig:
     warning_days: int
     minimum_certificate_lifetime_days: int
     retention_days_after_expiry: int
-    timer_randomized_delay_seconds: int
+    pre_activate_hook: str
+    pre_activate_hook_timeout_seconds: int
     deploy_hook: str
     deploy_hook_timeout_seconds: int
     write_debug_artifacts: bool
@@ -142,7 +141,8 @@ class ManagerConfig:
         server_id = resolver.string("server_id", "")
         peeringhub_environment = resolver.string("peeringhub_environment", "production")
         stipa_spc = resolver.string("stipa_spc", "")
-        account_dir = resolver.path("account_dir", "/var/lib/shaken/account")
+        state_dir = Path(string_value(data, "state_dir", "/var/lib/shaken"))
+        account_dir = resolver.path("account_dir", str(state_dir / "account"))
         return cls(
             enabled=bool(data.get("enabled", True)),
             peeringhub_environment=peeringhub_environment,
@@ -165,9 +165,6 @@ class ManagerConfig:
             ),
             shaken_subject_common_name_template=resolver.string(
                 "shaken_subject_common_name_template", ""
-            ),
-            shaken_subject_organization_template=resolver.string(
-                "shaken_subject_organization_template", ""
             ),
             acme_base_url_override=resolver.optional_string("acme_base_url_override"),
             acme_kid=resolver.string("acme_kid", ""),
@@ -207,8 +204,9 @@ class ManagerConfig:
             retention_days_after_expiry=int(
                 data.get("retention_days_after_expiry", 30)
             ),
-            timer_randomized_delay_seconds=int(
-                data.get("timer_randomized_delay_seconds", 21600)
+            pre_activate_hook=string_value(data, "pre_activate_hook", ""),
+            pre_activate_hook_timeout_seconds=int(
+                data.get("pre_activate_hook_timeout_seconds", 60)
             ),
             deploy_hook=string_value(data, "deploy_hook", ""),
             deploy_hook_timeout_seconds=int(
@@ -224,29 +222,27 @@ class ManagerConfig:
             include_crl_distribution_points=bool(
                 data.get("include_crl_distribution_points", False)
             ),
-            state_dir=Path(string_value(data, "state_dir", "/var/lib/shaken")),
-            work_dir=Path(string_value(data, "work_dir", "/var/lib/shaken/work")),
+            state_dir=state_dir,
+            work_dir=Path(string_value(data, "work_dir", str(state_dir / "work"))),
             archive_dir=Path(
-                string_value(data, "archive_dir", "/var/lib/shaken/archive")
+                string_value(data, "archive_dir", str(state_dir / "archive"))
             ),
-            live_dir=Path(string_value(data, "live_dir", "/var/lib/shaken/live")),
+            live_dir=Path(string_value(data, "live_dir", str(state_dir / "live"))),
             failed_dir=Path(
-                string_value(data, "failed_dir", "/var/lib/shaken/failed")
+                string_value(data, "failed_dir", str(state_dir / "failed"))
             ),
             account_dir=account_dir,
             active_manifest_path=Path(
-                string_value(
-                    data, "active_manifest_path", "/var/lib/shaken/active.json"
-                )
+                string_value(data, "active_manifest_path", str(state_dir / "active.json"))
             ),
             last_attempt_path=Path(
                 string_value(
-                    data, "last_attempt_path", "/var/lib/shaken/last-attempt.json"
+                    data, "last_attempt_path", str(state_dir / "last-attempt.json")
                 )
             ),
             lock_path=Path(
                 string_value(
-                    data, "lock_path", "/var/lib/shaken/shaken-cert-manager.lock"
+                    data, "lock_path", str(state_dir / "shaken-cert-manager.lock")
                 )
             ),
             raw=data,
@@ -316,6 +312,10 @@ class ManagerConfig:
                 self.minimum_certificate_lifetime_days
             ),
             "retention_days_after_expiry": self.retention_days_after_expiry,
+            "pre_activate_hook_configured": bool(self.pre_activate_hook),
+            "pre_activate_hook_timeout_seconds": (
+                self.pre_activate_hook_timeout_seconds
+            ),
             "deploy_hook_configured": bool(self.deploy_hook),
             "deploy_hook_timeout_seconds": self.deploy_hook_timeout_seconds,
             "retain_failed_transactions": self.retain_failed_transactions,

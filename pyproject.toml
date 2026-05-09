@@ -5,7 +5,8 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "shaken-cert-manager"
 version = "0.1.0"
-description = "SHAKEN certificate issuance and renewal lifecycle manager"
+description = "SHAKEN certificate issuance and renewal lifecycle manager (Certbot for SHAKEN Certs)"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
   "argcomplete>=3",

@@ -1,3 +1,8 @@
+# Example shaken-cert-manager configuration.
+# See README.md for setup, operations, and monitoring guidance.
+# See docs/configuration.md for configuration details.
+# See docs/subject-templates.md for certificate subject templating.
+
 # Enables certificate management. When false, status remains disabled and renew does not issue certificates.
 # Possible values: true, false.
 # enabled: true
@@ -31,23 +36,19 @@
 # shaken_subject_locality:
 
 # Organization for generated SHAKEN certificate subjects.
-# Required when enabled is true unless shaken_subject_organization_template supplies it.
+# Required when enabled is true.
 # shaken_subject_organization:
 
 # Organizational unit for generated SHAKEN certificate subjects.
 # shaken_subject_organizational_unit: VoIP
 
-# Strategy for generating certificate subject CN/O values when templates are not set.
+# Strategy for generating certificate subject CN values when no CN template is set.
 # Possible values: unique_per_generation, conservative_cn_unique_o.
 # subject_strategy: unique_per_generation
 
-# Python format template for the subject commonName.
+# Python format template for the subject commonName. See docs/subject-templates.md.
 # Available fields: server_id, generation_id, stipa_spc, organization.
 # shaken_subject_common_name_template:
-
-# Python format template for the subject organization.
-# Available fields: server_id, generation_id, stipa_spc, organization.
-# shaken_subject_organization_template:
 
 # STI-PA login user ID for requesting SPC tokens.
 # Required when enabled is true.
@@ -67,14 +68,19 @@
 # acme_kid:
 
 # Directory containing the ACME account key and state cache when explicit paths are not set.
-# account_dir: /var/lib/shaken/account
+# Defaults to [state_dir]/account.
+# account_dir:
 
-# ACME account private key path.
-# Defaults to account_dir/account.key when unset.
+# ACME account private key path. This is durable Peeringhub account identity
+# material and must exist before issuance. Create it manually with
+# stir-shaken-toolkit peeringhub-account-setup, or provision an existing key.
+# Defaults to [account_dir]/account.key.
 # acme_account_key_path:
 
-# ACME account state cache path.
-# Defaults to account_dir/account.json when unset.
+# ACME account state cache path. This file is recoverable cache; if it is
+# missing but acme_account_key_path exists, shaken-cert-manager refreshes it
+# from Peeringhub before issuance.
+# Defaults to [account_dir]/account.json.
 # acme_account_state_path:
 
 # Optional network timeout in seconds for ACME requests.
@@ -130,11 +136,19 @@
 # Days after expiration to keep archived certificate generations before cleanup.
 # retention_days_after_expiry: 30
 
-# Maximum randomized delay in seconds for scheduled/timer-driven execution.
-# timer_randomized_delay_seconds: 21600
+# Optional command executed after a new certificate generation is archived and linked
+# under live/<generation_id>, but before live/current is activated. A non-zero exit
+# rolls back the new live generation link and fails issuance.
+# The hook receives SHAKEN_* environment variables for the new generation, but not
+# live/current values because live/current still points at the previous generation.
+# pre_activate_hook:
 
-# Optional command executed after a new certificate generation is archived and linked under live/.
-# The hook receives SHAKEN_* environment variables describing the new artifacts.
+# Maximum seconds to allow the pre-activation hook to run.
+# pre_activate_hook_timeout_seconds: 60
+
+# Optional command executed after live/current and active.json are updated. A non-zero
+# exit is logged, but does not roll back the successful certificate activation.
+# The hook receives SHAKEN_* environment variables describing the active generation.
 # deploy_hook:
 
 # Maximum seconds to allow the deploy hook to run.
@@ -157,25 +171,33 @@
 # include_crl_distribution_points: false
 
 # Base state directory for manager-owned files.
+# Other manager-owned paths default under this directory.
 # state_dir: /var/lib/shaken
 
 # Temporary working directory used during issuance.
-# work_dir: /var/lib/shaken/work
+# Defaults to [state_dir]/work.
+# work_dir:
 
 # Archive directory for completed certificate generations.
-# archive_dir: /var/lib/shaken/archive
+# Defaults to [state_dir]/archive.
+# archive_dir:
 
 # Live symlink directory exposing unexpired generations and live/current.
-# live_dir: /var/lib/shaken/live
+# Defaults to [state_dir]/live.
+# live_dir:
 
 # Directory for retained failed transactions.
-# failed_dir: /var/lib/shaken/failed
+# Defaults to [state_dir]/failed.
+# failed_dir:
 
 # Path to the active generation manifest.
-# active_manifest_path: /var/lib/shaken/active.json
+# Defaults to [state_dir]/active.json.
+# active_manifest_path:
 
 # Path to the last issuance attempt result.
-# last_attempt_path: /var/lib/shaken/last-attempt.json
+# Defaults to [state_dir]/last-attempt.json.
+# last_attempt_path:
 
 # Lock file path used to serialize manager operations.
-# lock_path: /var/lib/shaken/shaken-cert-manager.lock
+# Defaults to [state_dir]/shaken-cert-manager.lock.
+# lock_path:

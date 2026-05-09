@@ -58,15 +58,13 @@ class ShakenCertManagerCli:
             if args.command == "renew":
                 return manager.renew()
             if args.command == "force-renew":
-                self.confirm_force_renew(args.skip_confirm)
+                if config.enabled:
+                    self.confirm_force_renew(args.skip_confirm)
                 return manager.force_renew()
             if args.command == "issue-initial":
                 return manager.issue_initial()
             if args.command == "cleanup":
                 return manager.cleanup()
-            if args.command == "clear-lock":
-                self.confirm_clear_lock(args.skip_confirm)
-                return manager.clear_lock()
             raise ManagerError(f"Unsupported command: {args.command}")
         except RuntimeError as exc:
             LOGGER.debug("Command failed with exception", exc_info=True)
@@ -114,14 +112,6 @@ class ShakenCertManagerCli:
             "issue-initial", help="Issue only when no active certificate exists"
         )
         subparsers.add_parser("cleanup", help="Remove expired inactive material")
-        clear_lock_parser = subparsers.add_parser(
-            "clear-lock", help="Clear a stale manager lock"
-        )
-        clear_lock_parser.add_argument(
-            "--skip-confirm",
-            action="store_true",
-            help="Clear a stale lock without interactive confirmation",
-        )
         argcomplete.autocomplete(parser)
         return parser.parse_args(argv)
 
@@ -170,25 +160,6 @@ class ShakenCertManagerCli:
         answer = input("Force certificate renewal now? Type 'yes' to continue: ")
         if answer != "yes":
             raise ManagerError("force-renew cancelled")
-
-    def confirm_clear_lock(self, skip_confirm: bool) -> None:
-        """Confirm lock removal.
-
-        :param skip_confirm: Skip interactive confirmation.
-        :type skip_confirm: bool
-        :return: None.
-        :rtype: None
-        :raises ManagerError: If confirmation is refused or unavailable.
-        """
-
-        if skip_confirm:
-            return
-        if not sys.stdin.isatty():
-            raise ManagerError("clear-lock requires --skip-confirm when non-interactive")
-        answer = input("Clear stale shaken-cert-manager lock? Type 'yes' to continue: ")
-        if answer != "yes":
-            raise ManagerError("clear-lock cancelled")
-
 
 def main() -> int:
     """Run the CLI entry point.

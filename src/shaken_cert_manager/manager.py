@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,7 +31,6 @@ from shaken_cert_manager.files import (
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
-    clear_stale_lock,
     now_utc,
     read_json,
 )
@@ -99,6 +99,17 @@ class ShakenCertManager:
 
         LOGGER.info("Issue-initial command started")
         with FileLock(self.config.lock_path):
+            if not self.config.enabled:
+                LOGGER.info(
+                    "Initial issuance skipped: SHAKEN certificate management disabled"
+                )
+                self.write_last_attempt(
+                    "issue-initial",
+                    "disabled",
+                    "SHAKEN certificate management disabled",
+                    active_generation_unchanged=True,
+                )
+                return 0
             self.prune_live_links()
             result = StatusChecker(self.config).check()
             if result.code in {OK, WARNING}:
@@ -114,6 +125,7 @@ class ShakenCertManager:
                     "issue-initial",
                     "no_renewal_needed",
                     "active certificate already exists",
+                    active_generation_unchanged=True,
                 )
                 return 0
             self.issue_certificate("issue-initial", force=True)
@@ -129,6 +141,15 @@ class ShakenCertManager:
 
         LOGGER.info("Renew command started")
         with FileLock(self.config.lock_path):
+            if not self.config.enabled:
+                LOGGER.info("Renewal skipped: SHAKEN certificate management disabled")
+                self.write_last_attempt(
+                    "renew",
+                    "disabled",
+                    "SHAKEN certificate management disabled",
+                    active_generation_unchanged=True,
+                )
+                return 0
             self.prune_live_links()
             if not self.renewal_required():
                 LOGGER.info("Renewal skipped: active certificate outside renewal window")
@@ -136,6 +157,7 @@ class ShakenCertManager:
                     "renew",
                     "no_renewal_needed",
                     "active certificate outside renewal window",
+                    active_generation_unchanged=True,
                 )
                 return 0
             self.issue_certificate("renew", force=False)
@@ -151,6 +173,17 @@ class ShakenCertManager:
 
         LOGGER.info("Force-renew command started")
         with FileLock(self.config.lock_path):
+            if not self.config.enabled:
+                LOGGER.info(
+                    "Force-renew skipped: SHAKEN certificate management disabled"
+                )
+                self.write_last_attempt(
+                    "force-renew",
+                    "disabled",
+                    "SHAKEN certificate management disabled",
+                    active_generation_unchanged=True,
+                )
+                return 0
             self.prune_live_links()
             self.issue_certificate("force-renew", force=True)
             LOGGER.info("Force-renew command completed")
@@ -165,6 +198,15 @@ class ShakenCertManager:
 
         LOGGER.info("Cleanup command started")
         with FileLock(self.config.lock_path):
+            if not self.config.enabled:
+                LOGGER.info("Cleanup skipped: SHAKEN certificate management disabled")
+                self.write_last_attempt(
+                    "cleanup",
+                    "disabled",
+                    "SHAKEN certificate management disabled",
+                    active_generation_unchanged=True,
+                )
+                return 0
             self.prune_live_links()
             active_generation_id = self.active_generation_id()
             cutoff = datetime.now(UTC) - timedelta(
@@ -188,28 +230,16 @@ class ShakenCertManager:
                 removed_archives += 1
             self.prune_failed_archives()
             self.prune_live_links()
-            self.write_last_attempt("cleanup", "success", "cleanup complete")
+            self.write_last_attempt(
+                "cleanup",
+                "success",
+                "cleanup complete",
+                active_generation_unchanged=True,
+            )
             LOGGER.info(
                 "Cleanup command completed: removed_archives=%s", removed_archives
             )
             return 0
-
-    def clear_lock(self) -> int:
-        """Clear a stale manager lock file.
-
-        :return: Exit code.
-        :rtype: int
-        """
-
-        LOGGER.info("Clear-lock command started")
-        details = clear_stale_lock(self.config.lock_path)
-        if details:
-            print(f"cleared stale lock {self.config.lock_path}: {details}")
-            LOGGER.info("Clear-lock command completed: lock_cleared=True")
-        else:
-            print(f"no lock file exists at {self.config.lock_path}")
-            LOGGER.info("Clear-lock command completed: lock_cleared=False")
-        return 0
 
     def renewal_required(self) -> bool:
         """Return whether a renewal is required.
@@ -262,10 +292,25 @@ class ShakenCertManager:
         if not self.config.enabled:
             LOGGER.info("Issuance skipped: SHAKEN certificate management disabled")
             self.write_last_attempt(
-                command, "no_renewal_needed", "SHAKEN certificate management disabled"
+                command,
+                "disabled",
+                "SHAKEN certificate management disabled",
+                active_generation_unchanged=True,
             )
             return
         started_at = now_utc()
+        try:
+            self.preflight()
+            self.refresh_account_state_if_needed()
+        except Exception as exc:
+            self.write_last_attempt(
+                command,
+                "failed",
+                str(exc),
+                started_at=started_at,
+                active_generation_unchanged=True,
+            )
+            raise
         generation_id = self.new_generation_id()
         transaction_dir = self.config.work_dir / generation_id
         LOGGER.info(
@@ -283,8 +328,8 @@ class ShakenCertManager:
         )
         transaction_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
         live_generation_created = False
+        active_generation_changed = False
         try:
-            self.preflight()
             issuer = self.prepare_peeringhub_issuer(generation_id)
             LOGGER.debug(
                 "Calling toolkit issuer: generation_id=%s stipa_spc=%s "
@@ -351,6 +396,7 @@ class ShakenCertManager:
                 certificate_url=result.certificate_url,
                 stipa_token=result.stipa_token,
                 account_state=result.account_state,
+                pre_activate_hook_status="pending",
                 deploy_hook_status="pending",
             )
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
@@ -363,21 +409,30 @@ class ShakenCertManager:
             self.create_live_generation_links(generation_id, archive_dir)
             live_generation_created = True
             try:
-                deploy_hook_status = self.run_deploy_hook(
+                pre_activate_hook_status = self.run_pre_activate_hook(
                     archive_dir / "manifest.json"
                 )
             except Exception:
-                LOGGER.warning(
-                    "Deploy hook failed; rolling back live generation links: "
-                    + "generation_id=%s",
-                    generation_id,
-                )
-                self.remove_live_generation_links(generation_id)
+                manifest["pre_activate_hook_status"] = "failed"
+                atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
                 raise
-            manifest["deploy_hook_status"] = deploy_hook_status
-            manifest["deployed_at"] = now_utc()
+            manifest["pre_activate_hook_status"] = pre_activate_hook_status
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
             self.update_live_current(generation_id)
+            active_generation_changed = True
+            manifest["activated_at"] = now_utc()
+            atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
+            atomic_write_json(self.config.active_manifest_path, manifest, 0o600)
+            try:
+                deploy_hook_status = self.run_deploy_hook(
+                    archive_dir / "manifest.json"
+                )
+            except Exception as exc:
+                deploy_hook_status = "failed"
+                LOGGER.warning("Deploy hook failed after activation: %s", exc)
+            manifest["deploy_hook_status"] = deploy_hook_status
+            manifest["deploy_hook_finished_at"] = now_utc()
+            atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
             atomic_write_json(self.config.active_manifest_path, manifest, 0o600)
             LOGGER.debug(
                 "Active manifest updated: path=%s generation_id=%s",
@@ -392,6 +447,7 @@ class ShakenCertManager:
                 "certificate issued",
                 started_at=started_at,
                 generation_id=generation_id,
+                active_generation_unchanged=False,
             )
             LOGGER.info(
                 "Certificate issuance completed: generation_id=%s archive_dir=%s "
@@ -401,7 +457,7 @@ class ShakenCertManager:
                 self.config.live_dir / "current",
             )
         except IssuanceValidationError as exc:
-            if live_generation_created:
+            if live_generation_created and not active_generation_changed:
                 LOGGER.warning(
                     "Validation failed; rolling back live generation links: "
                     + "generation_id=%s",
@@ -410,11 +466,16 @@ class ShakenCertManager:
                 self.remove_live_generation_links(generation_id)
             self.archive_validation_failure(generation_id, exc.partial_result)
             self.record_failure(
-                command, generation_id, transaction_dir, started_at, exc
+                command,
+                generation_id,
+                transaction_dir,
+                started_at,
+                exc,
+                active_generation_unchanged=not active_generation_changed,
             )
             raise
         except Exception as exc:
-            if live_generation_created:
+            if live_generation_created and not active_generation_changed:
                 LOGGER.warning(
                     "Issuance failed; rolling back live generation links: "
                     + "generation_id=%s",
@@ -422,7 +483,12 @@ class ShakenCertManager:
                 )
                 self.remove_live_generation_links(generation_id)
             self.record_failure(
-                command, generation_id, transaction_dir, started_at, exc
+                command,
+                generation_id,
+                transaction_dir,
+                started_at,
+                exc,
+                active_generation_unchanged=not active_generation_changed,
             )
             raise
 
@@ -451,12 +517,53 @@ class ShakenCertManager:
         LOGGER.debug("Preflight ensuring live directory: path=%s", self.config.live_dir)
         self.ensure_directory_mode(self.config.live_dir, 0o755)
         if not self.config.acme_account_key_path.exists():
-            raise ValidationError(
-                f"ACME account private key is missing: {self.config.acme_account_key_path}"
+            details = (
+                "ACME account private key is missing: "
+                + f"{self.config.acme_account_key_path}. Create or provision the "
+                + "Peeringhub ACME account key before running shaken-cert-manager. "
+                + "For manual setup of the configured account directory, run: "
+                + "stir-shaken-toolkit peeringhub-account-setup --account-dir "
+                + f"{self.config.account_dir}. If acme_account_key_path is set "
+                + "outside account_dir, create the key at that exact path or "
+                + "update the manager config"
             )
+            if self.config.acme_account_state_path.exists():
+                details = (
+                    details
+                    + f". ACME account state cache exists at "
+                    + f"{self.config.acme_account_state_path}, but account.json is "
+                    + "recoverable cache and cannot replace account.key"
+                )
+            raise ValidationError(details)
         LOGGER.debug(
             "Preflight completed: acme_account_key_path=%s",
             self.config.acme_account_key_path,
+        )
+
+    def refresh_account_state_if_needed(self) -> None:
+        """Refresh recoverable ACME account state before certificate issuance.
+
+        :return: None.
+        :rtype: None
+        """
+
+        if self.config.acme_account_state_path.exists():
+            LOGGER.debug(
+                "ACME account state cache exists: path=%s",
+                self.config.acme_account_state_path,
+            )
+            return
+        LOGGER.info(
+            "ACME account state cache missing; refreshing from Peeringhub using "
+            + "configured account key"
+        )
+        issuer = self.prepare_peeringhub_account_issuer()
+        state = issuer.prepare_account()
+        LOGGER.info(
+            "ACME account state refreshed: account_url=%s status=%s state_path=%s",
+            state.account_url,
+            state.status,
+            self.config.acme_account_state_path,
         )
 
     def ensure_directory_mode(self, directory: Path, mode: int) -> None:
@@ -474,83 +581,228 @@ class ShakenCertManager:
         os.chmod(directory, mode)
         LOGGER.debug("Directory mode ensured: path=%s mode=%s", directory, oct(mode))
 
-    def run_deploy_hook(self, manifest_path: Path) -> str:
-        """Run the configured deploy hook for an archived generation.
+    def run_pre_activate_hook(self, manifest_path: Path) -> str:
+        """Run the configured pre-activation hook for an archived generation.
 
         :param manifest_path: Archived manifest path.
         :type manifest_path: Path
         :return: Hook status string.
         :rtype: str
-        :raises ManagerError: If the deploy hook fails or times out.
+        :raises ManagerError: If the pre-activation hook fails or times out.
         """
 
-        if not self.config.deploy_hook:
-            LOGGER.info("Deploy hook disabled")
+        return self.run_lifecycle_hook(
+            hook_name="Pre-activate hook",
+            command=self.config.pre_activate_hook,
+            timeout_seconds=self.config.pre_activate_hook_timeout_seconds,
+            manifest_path=manifest_path,
+            include_current_links=False,
+            fail_on_error=True,
+        )
+
+    def run_deploy_hook(self, manifest_path: Path) -> str:
+        """Run the configured post-activation deploy hook.
+
+        :param manifest_path: Archived manifest path.
+        :type manifest_path: Path
+        :return: Hook status string.
+        :rtype: str
+        """
+
+        return self.run_lifecycle_hook(
+            hook_name="Deploy hook",
+            command=self.config.deploy_hook,
+            timeout_seconds=self.config.deploy_hook_timeout_seconds,
+            manifest_path=manifest_path,
+            include_current_links=True,
+            fail_on_error=False,
+        )
+
+    def run_lifecycle_hook(
+        self,
+        hook_name: str,
+        command: str,
+        timeout_seconds: int,
+        manifest_path: Path,
+        include_current_links: bool,
+        fail_on_error: bool,
+    ) -> str:
+        """Run a configured lifecycle hook.
+
+        :param hook_name: Human-readable hook name.
+        :type hook_name: str
+        :param command: Hook command string.
+        :type command: str
+        :param timeout_seconds: Hook timeout.
+        :type timeout_seconds: int
+        :param manifest_path: Archived manifest path.
+        :type manifest_path: Path
+        :param include_current_links: Include live/current environment values.
+        :type include_current_links: bool
+        :param fail_on_error: Raise when the hook fails.
+        :type fail_on_error: bool
+        :return: Hook status string.
+        :rtype: str
+        :raises ManagerError: If a required hook fails or times out.
+        """
+
+        if not command:
+            LOGGER.info("%s disabled", hook_name)
             return "disabled"
         manifest = read_json(manifest_path)
-        environment = self.deploy_hook_environment(manifest_path, manifest)
-        LOGGER.info("Deploy hook started")
+        environment = self.hook_environment(
+            manifest_path, manifest, include_current_links=include_current_links
+        )
+        LOGGER.info("%s started", hook_name)
         LOGGER.debug(
-            "Deploy hook invocation: command=%s timeout_seconds=%s manifest_path=%s "
+            "%s invocation: command=%s timeout_seconds=%s manifest_path=%s "
             + "generation_id=%s",
-            self.config.deploy_hook,
-            self.config.deploy_hook_timeout_seconds,
+            hook_name,
+            command,
+            timeout_seconds,
             manifest_path,
             manifest.get("generation_id"),
         )
+        result: subprocess.CompletedProcess[str]
         try:
-            result = subprocess.run(
-                self.config.deploy_hook,
-                check=False,
-                env=environment,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=self.config.deploy_hook_timeout_seconds,
-            )
+            result = self.run_hook_command(command, environment, timeout_seconds)
         except subprocess.TimeoutExpired as exc:
+            self.log_hook_timeout_output(hook_name, exc)
             LOGGER.warning(
-                "Deploy hook timed out: timeout_seconds=%s",
-                self.config.deploy_hook_timeout_seconds,
+                "%s timed out: timeout_seconds=%s", hook_name, timeout_seconds
             )
-            raise ManagerError(
-                f"deploy hook timed out after {self.config.deploy_hook_timeout_seconds} seconds"
-            ) from exc
+            if fail_on_error:
+                raise ManagerError(
+                    f"{hook_name.lower()} timed out after {timeout_seconds} seconds"
+                ) from exc
+            return "timeout"
         LOGGER.debug(
-            "Deploy hook completed: returncode=%s stdout_present=%s stderr_present=%s",
+            "%s completed: returncode=%s stdout_present=%s stderr_present=%s",
+            hook_name,
             result.returncode,
             bool(result.stdout.strip()),
             bool(result.stderr.strip()),
         )
+        if result.stdout.strip():
+            LOGGER.debug("%s stdout:\n%s", hook_name, result.stdout.strip())
+        if result.stderr.strip():
+            LOGGER.debug("%s stderr:\n%s", hook_name, result.stderr.strip())
         if result.returncode != 0:
             stderr = result.stderr.strip()
             stdout = result.stdout.strip()
             detail = stderr or stdout or f"exit code {result.returncode}"
-            LOGGER.warning("Deploy hook failed: %s", detail)
-            raise ManagerError(f"deploy hook failed: {detail}")
-        LOGGER.info("Deploy hook succeeded")
+            LOGGER.warning("%s failed: %s", hook_name, detail)
+            if fail_on_error:
+                raise ManagerError(f"{hook_name.lower()} failed: {detail}")
+            return "failed"
+        LOGGER.info("%s succeeded", hook_name)
         return "success"
 
-    def deploy_hook_environment(
-        self, manifest_path: Path, manifest: dict[str, Any]
+    def run_hook_command(
+        self, command: str, environment: dict[str, str], timeout_seconds: int
+    ) -> subprocess.CompletedProcess[str]:
+        """Run a lifecycle hook command in its own process group.
+
+        :param command: Hook command string.
+        :type command: str
+        :param environment: Hook environment.
+        :type environment: dict[str, str]
+        :param timeout_seconds: Hook timeout.
+        :type timeout_seconds: int
+        :return: Completed hook process.
+        :rtype: subprocess.CompletedProcess[str]
+        :raises subprocess.TimeoutExpired: If the hook times out.
+        """
+
+        process = subprocess.Popen(
+            command,
+            env=environment,
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,
+        )
+        try:
+            stdout, stderr = process.communicate(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired as exc:
+            self.terminate_hook_process_group(process)
+            stdout, stderr = process.communicate()
+            exc.stdout = stdout
+            exc.stderr = stderr
+            raise
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=process.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    def terminate_hook_process_group(self, process: subprocess.Popen[str]) -> None:
+        """Terminate a lifecycle hook process group after timeout.
+
+        :param process: Hook process.
+        :type process: subprocess.Popen[str]
+        :return: None.
+        :rtype: None
+        """
+
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+
+    def log_hook_timeout_output(
+        self, hook_name: str, exc: subprocess.TimeoutExpired
+    ) -> None:
+        """Log lifecycle hook output captured before a timeout.
+
+        :param hook_name: Human-readable hook name.
+        :type hook_name: str
+        :param exc: Timeout exception.
+        :type exc: subprocess.TimeoutExpired
+        :return: None.
+        :rtype: None
+        """
+
+        stdout = (exc.stdout or "").strip()
+        stderr = (exc.stderr or "").strip()
+        if stdout:
+            LOGGER.debug("%s timed out with stdout:\n%s", hook_name, stdout)
+        if stderr:
+            LOGGER.debug("%s timed out with stderr:\n%s", hook_name, stderr)
+
+    def hook_environment(
+        self,
+        manifest_path: Path,
+        manifest: dict[str, Any],
+        include_current_links: bool,
     ) -> dict[str, str]:
-        """Build deploy hook environment values.
+        """Build lifecycle hook environment values.
 
         :param manifest_path: Archived manifest path.
         :type manifest_path: Path
         :param manifest: Manifest values.
         :type manifest: dict[str, Any]
+        :param include_current_links: Include live/current environment values.
+        :type include_current_links: bool
         :return: Hook environment.
         :rtype: dict[str, str]
         """
 
         environment = dict(os.environ)
         archive_dir = manifest_path.parent
+        subject = self.build_subject(str(manifest["generation_id"]))
         live_generation_dir = self.live_generation_dir(
             str(manifest["generation_id"])
         )
-        live_current_dir = self.config.live_dir / "current"
         hook_values = {
             "SHAKEN_GENERATION_ID": manifest.get("generation_id"),
             "SHAKEN_ENVIRONMENT": manifest.get("peeringhub_environment"),
@@ -563,9 +815,6 @@ class ShakenCertManager:
             "SHAKEN_LIVE_LEAF_CERT_PATH": live_generation_dir / "leaf.pem",
             "SHAKEN_LIVE_CHAIN_CERT_PATH": live_generation_dir
             / "certificate-chain.pem",
-            "SHAKEN_LIVE_CURRENT_DIR": live_current_dir,
-            "SHAKEN_LIVE_CURRENT_CHAIN_CERT_PATH": live_current_dir
-            / "certificate-chain.pem",
             "SHAKEN_MANIFEST_PATH": manifest_path,
             "SHAKEN_LEAF_CERT_PATH": manifest.get("leaf_certificate_path"),
             "SHAKEN_CHAIN_CERT_PATH": manifest.get("certificate_chain_path"),
@@ -575,12 +824,31 @@ class ShakenCertManager:
             "SHAKEN_NOT_AFTER": manifest.get("not_after"),
             "SHAKEN_FINGERPRINT_SHA256": manifest.get("fingerprint_sha256"),
             "SHAKEN_PREVIOUS_GENERATION_ID": manifest.get("previous_generation_id"),
+            "SHAKEN_SUBJECT": manifest.get("subject"),
+            "SHAKEN_SUBJECT_COMMON_NAME": subject.common_name,
+            "SHAKEN_SUBJECT_COUNTRY": subject.country,
+            "SHAKEN_SUBJECT_LOCALITY": subject.locality,
+            "SHAKEN_SUBJECT_ORGANIZATION": subject.organization,
+            "SHAKEN_SUBJECT_ORGANIZATIONAL_UNIT": subject.organizational_unit,
+            "SHAKEN_SUBJECT_STATE": subject.state,
         }
+        if include_current_links:
+            live_current_dir = self.config.live_dir / "current"
+            hook_values.update(
+                {
+                    "SHAKEN_LIVE_CURRENT_DIR": live_current_dir,
+                    "SHAKEN_LIVE_CURRENT_LEAF_CERT_PATH": live_current_dir
+                    / "leaf.pem",
+                    "SHAKEN_LIVE_CURRENT_CHAIN_CERT_PATH": live_current_dir
+                    / "certificate-chain.pem",
+                }
+            )
         for key, value in hook_values.items():
             environment[key] = "" if value is None else str(value)
         LOGGER.debug(
-            "Deploy hook environment prepared: keys=%s",
+            "Lifecycle hook environment prepared: keys=%s include_current_links=%s",
             sorted(hook_values),
+            include_current_links,
         )
         return environment
 
@@ -644,8 +912,10 @@ class ShakenCertManager:
             "stipa_crl_url": values["stipa_token"].crl_url,
             "installed_at": now_utc(),
             "previous_generation_id": self.active_generation_id(),
-            "deploy_hook": self.config.deploy_hook,
+            "pre_activate_hook": self.config.pre_activate_hook,
+            "pre_activate_hook_status": values["pre_activate_hook_status"],
             "deploy_hook_status": values["deploy_hook_status"],
+            "deploy_hook": self.config.deploy_hook,
         }
 
     def record_failure(
@@ -655,6 +925,8 @@ class ShakenCertManager:
         transaction_dir: Path,
         started_at: str,
         exc: Exception,
+        *,
+        active_generation_unchanged: bool,
     ) -> None:
         """Record a sanitized failure manifest.
 
@@ -668,6 +940,8 @@ class ShakenCertManager:
         :type started_at: str
         :param exc: Exception.
         :type exc: Exception
+        :param active_generation_unchanged: Whether active generation was unchanged.
+        :type active_generation_unchanged: bool
         :return: None.
         :rtype: None
         """
@@ -702,12 +976,13 @@ class ShakenCertManager:
             str(exc),
             started_at=started_at,
             generation_id=generation_id,
-            active_generation_unchanged=True,
+            active_generation_unchanged=active_generation_unchanged,
         )
         self.prune_failed_archives()
         LOGGER.debug(
-            "Failure state recorded: generation_id=%s active_generation_unchanged=True",
+            "Failure state recorded: generation_id=%s active_generation_unchanged=%s",
             generation_id,
+            active_generation_unchanged,
         )
 
     def archive_validation_failure(
@@ -778,7 +1053,8 @@ class ShakenCertManager:
         reason: str,
         started_at: str | None = None,
         generation_id: str | None = None,
-        active_generation_unchanged: bool = False,
+        *,
+        active_generation_unchanged: bool,
     ) -> None:
         """Write the last-attempt manifest.
 
@@ -1098,6 +1374,38 @@ class ShakenCertManager:
         )
         return PeeringhubIssuer.build(**issuer_kwargs)
 
+    def prepare_peeringhub_account_issuer(self) -> PeeringhubIssuer:
+        """Build a Peeringhub issuer for ACME account state refresh.
+
+        :return: Peeringhub issuer.
+        :rtype: PeeringhubIssuer
+        """
+
+        issuer_kwargs = {
+            "environment": self.config.peeringhub_environment,
+            "acme_base_url": self.config.acme_url(),
+            "account_key_path": self.config.acme_account_key_path,
+            "account_state_path": self.config.acme_account_state_path,
+            "acme_kid": self.config.acme_kid,
+        }
+        if self.config.acme_timeout_seconds is not None:
+            issuer_kwargs["timeout_seconds"] = self.config.acme_timeout_seconds
+        if self.config.acme_bad_nonce_retries is not None:
+            issuer_kwargs["bad_nonce_retries"] = self.config.acme_bad_nonce_retries
+        LOGGER.debug(
+            "Prepared Peeringhub account issuer settings: environment=%s "
+            + "acme_base_url=%s account_key_path=%s account_state_path=%s "
+            + "acme_kid_configured=%s timeout_seconds=%s bad_nonce_retries=%s",
+            self.config.peeringhub_environment,
+            self.config.acme_url(),
+            self.config.acme_account_key_path,
+            self.config.acme_account_state_path,
+            bool(self.config.acme_kid),
+            issuer_kwargs.get("timeout_seconds"),
+            issuer_kwargs.get("bad_nonce_retries"),
+        )
+        return PeeringhubIssuer.for_account_status(**issuer_kwargs)
+
     def stipa_settings(self) -> StipaSettings:
         """Build reusable STI-PA settings from manager configuration.
 
@@ -1182,15 +1490,7 @@ class ShakenCertManager:
             "stipa_spc": self.config.stipa_spc,
             "organization": self.config.shaken_subject_organization,
         }
-        if self.config.shaken_subject_organization_template:
-            organization = render_subject_template(
-                self.config.shaken_subject_organization_template, template_values
-            )
-        else:
-            organization = (
-                f"{self.config.shaken_subject_organization} "
-                f"{self.config.server_id} {generation_id}"
-            )
+        organization = self.config.shaken_subject_organization
         if self.config.shaken_subject_common_name_template:
             common_name = render_subject_template(
                 self.config.shaken_subject_common_name_template, template_values
