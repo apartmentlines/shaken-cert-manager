@@ -91,6 +91,11 @@ class StatusChecker:
                 "active_private_key_path": str(key_path),
                 "leaf_certificate_path": str(certificate_path),
                 "certificate_chain_path": manifest.get("certificate_chain_path"),
+                "live_current_path": str(self.config.live_dir / "current"),
+                "live_current_generation_id": self.live_current_generation_id(),
+                "live_certificate_chain_path": manifest.get(
+                    "live_certificate_chain_path"
+                ),
                 "deploy_hook_status": manifest.get("deploy_hook_status"),
                 "last_successful_renewal": manifest.get("installed_at"),
                 "last_attempt_result": self.last_attempt_result(),
@@ -146,3 +151,15 @@ class StatusChecker:
             self.last_attempt_result() == "failed"
             and days_remaining <= self.config.renew_before_days
         )
+
+    def live_current_generation_id(self) -> str | None:
+        """Return the current live generation target.
+
+        :return: Generation ID or ``None``.
+        :rtype: str | None
+        """
+
+        current_path = self.config.live_dir / "current"
+        if not current_path.is_symlink():
+            return None
+        return current_path.readlink().name

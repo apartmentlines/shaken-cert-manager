@@ -91,6 +91,7 @@ class ShakenCertManager:
         """
 
         with FileLock(self.config.lock_path, wait_lock):
+            self.prune_live_links()
             if StatusChecker(self.config).check().code in {OK, WARNING}:
                 self.write_last_attempt(
                     "issue-initial",
@@ -111,6 +112,7 @@ class ShakenCertManager:
         """
 
         with FileLock(self.config.lock_path, wait_lock):
+            self.prune_live_links()
             if not self.renewal_required():
                 self.write_last_attempt(
                     "renew",
@@ -141,6 +143,7 @@ class ShakenCertManager:
                 "force-renew in production requires --allow-production-force-renew or config allowance"
             )
         with FileLock(self.config.lock_path, wait_lock):
+            self.prune_live_links()
             self.issue_certificate("force-renew", force=True)
             return 0
 
@@ -175,6 +178,7 @@ class ShakenCertManager:
         """
 
         with FileLock(self.config.lock_path, wait_lock):
+            self.prune_live_links()
             active_generation_id = self.active_generation_id()
             cutoff = datetime.now(UTC) - timedelta(
                 days=self.config.retention_days_after_expiry
@@ -189,6 +193,7 @@ class ShakenCertManager:
                     continue
                 shutil.rmtree(manifest_path.parent)
             self.prune_failed_archives()
+            self.prune_live_links()
             self.write_last_attempt("cleanup", "success", "cleanup complete")
             return 0
 
@@ -230,6 +235,7 @@ class ShakenCertManager:
         generation_id = self.new_generation_id()
         transaction_dir = self.config.work_dir / generation_id
         transaction_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+        live_generation_created = False
         try:
             self.preflight()
             issuer = self.prepare_peeringhub_issuer(generation_id)
@@ -243,13 +249,13 @@ class ShakenCertManager:
             atomic_write_bytes(csr_pem_path, result.csr_pem, 0o600)
             atomic_write_bytes(csr_der_path, result.csr_der, 0o600)
             archive_dir = self.config.archive_dir / generation_id
-            archive_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+            archive_dir.mkdir(parents=True, mode=0o711, exist_ok=False)
             leaf_archive_path = archive_dir / "leaf.pem"
             chain_archive_path = archive_dir / "certificate-chain.pem"
             shutil.copy2(csr_pem_path, archive_dir / "csr.pem")
             shutil.copy2(csr_der_path, archive_dir / "csr.der")
-            atomic_write_text(chain_archive_path, result.chain_pem, 0o600)
-            atomic_write_text(leaf_archive_path, result.leaf_pem, 0o600)
+            atomic_write_text(chain_archive_path, result.chain_pem, 0o644)
+            atomic_write_text(leaf_archive_path, result.leaf_pem, 0o644)
             atomic_write_json(archive_dir / "order.json", result.valid_order, 0o600)
             atomic_write_json(
                 archive_dir / "authorization.json", result.authorization, 0o600
@@ -275,10 +281,19 @@ class ShakenCertManager:
                 deploy_hook_status="pending",
             )
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
-            deploy_hook_status = self.run_deploy_hook(archive_dir / "manifest.json")
+            self.create_live_generation_links(generation_id, archive_dir)
+            live_generation_created = True
+            try:
+                deploy_hook_status = self.run_deploy_hook(
+                    archive_dir / "manifest.json"
+                )
+            except Exception:
+                self.remove_live_generation_links(generation_id)
+                raise
             manifest["deploy_hook_status"] = deploy_hook_status
             manifest["deployed_at"] = now_utc()
             atomic_write_json(archive_dir / "manifest.json", manifest, 0o600)
+            self.update_live_current(generation_id)
             atomic_write_json(self.config.active_manifest_path, manifest, 0o600)
             shutil.rmtree(transaction_dir)
             self.write_last_attempt(
@@ -289,12 +304,16 @@ class ShakenCertManager:
                 generation_id=generation_id,
             )
         except IssuanceValidationError as exc:
+            if live_generation_created:
+                self.remove_live_generation_links(generation_id)
             self.archive_validation_failure(generation_id, exc.partial_result)
             self.record_failure(
                 command, generation_id, transaction_dir, started_at, exc
             )
             raise
         except Exception as exc:
+            if live_generation_created:
+                self.remove_live_generation_links(generation_id)
             self.record_failure(
                 command, generation_id, transaction_dir, started_at, exc
             )
@@ -307,21 +326,38 @@ class ShakenCertManager:
         :rtype: None
         """
 
-        required_dirs = [
-            self.config.state_dir,
+        private_dirs = [
             self.config.work_dir,
-            self.config.archive_dir,
             self.config.failed_dir,
             self.config.account_dir,
         ]
-        for directory in required_dirs:
-            directory.mkdir(parents=True, mode=0o700, exist_ok=True)
-            if directory.stat().st_mode & 0o077:
-                raise ValidationError(f"state directory must be root-only: {directory}")
+        traversable_dirs = [
+            self.config.state_dir,
+            self.config.archive_dir,
+        ]
+        for directory in private_dirs:
+            self.ensure_directory_mode(directory, 0o700)
+        for directory in traversable_dirs:
+            self.ensure_directory_mode(directory, 0o711)
+        self.ensure_directory_mode(self.config.live_dir, 0o755)
         if not self.config.acme_account_key_path.exists():
             raise ValidationError(
                 f"ACME account private key is missing: {self.config.acme_account_key_path}"
             )
+
+    def ensure_directory_mode(self, directory: Path, mode: int) -> None:
+        """Create a directory and enforce its permissions.
+
+        :param directory: Directory path.
+        :type directory: Path
+        :param mode: Directory mode.
+        :type mode: int
+        :return: None.
+        :rtype: None
+        """
+
+        directory.mkdir(parents=True, mode=mode, exist_ok=True)
+        os.chmod(directory, mode)
 
     def run_deploy_hook(self, manifest_path: Path) -> str:
         """Run the configured deploy hook for an archived generation.
@@ -374,6 +410,10 @@ class ShakenCertManager:
 
         environment = dict(os.environ)
         archive_dir = manifest_path.parent
+        live_generation_dir = self.live_generation_dir(
+            str(manifest["generation_id"])
+        )
+        live_current_dir = self.config.live_dir / "current"
         hook_values = {
             "SHAKEN_GENERATION_ID": manifest.get("generation_id"),
             "SHAKEN_ENVIRONMENT": manifest.get("environment"),
@@ -381,6 +421,14 @@ class ShakenCertManager:
             "SHAKEN_SPC": manifest.get("spc"),
             "SHAKEN_PRIVATE_KEY_PATH": manifest.get("certificate_private_key_path"),
             "SHAKEN_ARCHIVE_DIR": archive_dir,
+            "SHAKEN_LIVE_DIR": self.config.live_dir,
+            "SHAKEN_LIVE_GENERATION_DIR": live_generation_dir,
+            "SHAKEN_LIVE_LEAF_CERT_PATH": live_generation_dir / "leaf.pem",
+            "SHAKEN_LIVE_CHAIN_CERT_PATH": live_generation_dir
+            / "certificate-chain.pem",
+            "SHAKEN_LIVE_CURRENT_DIR": live_current_dir,
+            "SHAKEN_LIVE_CURRENT_CHAIN_CERT_PATH": live_current_dir
+            / "certificate-chain.pem",
             "SHAKEN_MANIFEST_PATH": manifest_path,
             "SHAKEN_LEAF_CERT_PATH": manifest.get("leaf_certificate_path"),
             "SHAKEN_CHAIN_CERT_PATH": manifest.get("certificate_chain_path"),
@@ -419,6 +467,16 @@ class ShakenCertManager:
             "certificate_private_key_source": "peeringhub_acme_account_key",
             "certificate_chain_path": str(values["chain_archive_path"]),
             "leaf_certificate_path": str(values["leaf_archive_path"]),
+            "live_generation_dir": str(
+                self.live_generation_dir(str(values["generation_id"]))
+            ),
+            "live_certificate_chain_path": str(
+                self.live_generation_dir(str(values["generation_id"]))
+                / "certificate-chain.pem"
+            ),
+            "live_leaf_certificate_path": str(
+                self.live_generation_dir(str(values["generation_id"])) / "leaf.pem"
+            ),
             "serial_number": cert_details["serial_number"],
             "not_before": cert_details["not_before"],
             "not_after": cert_details["not_after"],
@@ -629,6 +687,126 @@ class ShakenCertManager:
         )
         for directory in failed_dirs[self.config.max_failed_transactions_retained :]:
             shutil.rmtree(directory)
+
+    def prune_live_links(self) -> None:
+        """Remove expired or broken live generation symlink trees.
+
+        :return: None.
+        :rtype: None
+        """
+
+        if not self.config.live_dir.exists():
+            return
+        now = datetime.now(UTC)
+        for directory in self.config.live_dir.iterdir():
+            if directory.name == "current":
+                continue
+            if not directory.is_dir() and not directory.is_symlink():
+                continue
+            generation_id = directory.name
+            manifest_path = self.config.archive_dir / generation_id / "manifest.json"
+            if not manifest_path.exists():
+                self.remove_live_path(directory)
+                continue
+            try:
+                manifest = read_json(manifest_path)
+            except (OSError, ValueError, json.JSONDecodeError):
+                self.remove_live_path(directory)
+                continue
+            not_after = parse_timestamp(str(manifest.get("not_after", "")))
+            if not_after is None or not_after <= now:
+                self.remove_live_path(directory)
+        self.remove_stale_live_current()
+
+    def create_live_generation_links(
+        self, generation_id: str, archive_dir: Path
+    ) -> None:
+        """Create a live symlink tree for a generation.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :param archive_dir: Archive directory.
+        :type archive_dir: Path
+        :return: None.
+        :rtype: None
+        """
+
+        self.ensure_directory_mode(self.config.live_dir, 0o755)
+        final_dir = self.live_generation_dir(generation_id)
+        temporary_dir = (
+            self.config.live_dir / f".{generation_id}.{secrets.token_hex(4)}"
+        )
+        if final_dir.exists() or final_dir.is_symlink():
+            raise ValidationError(f"live generation already exists: {final_dir}")
+        temporary_dir.mkdir(mode=0o755)
+        for name in ["leaf.pem", "certificate-chain.pem"]:
+            target = archive_dir / name
+            link_target = os.path.relpath(target, start=final_dir)
+            (temporary_dir / name).symlink_to(link_target)
+        os.replace(temporary_dir, final_dir)
+
+    def update_live_current(self, generation_id: str) -> None:
+        """Atomically point live/current at a generation directory.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :return: None.
+        :rtype: None
+        """
+
+        self.ensure_directory_mode(self.config.live_dir, 0o755)
+        current_path = self.config.live_dir / "current"
+        temporary_path = self.config.live_dir / f".current.{secrets.token_hex(4)}"
+        temporary_path.symlink_to(generation_id, target_is_directory=True)
+        os.replace(temporary_path, current_path)
+
+    def remove_live_generation_links(self, generation_id: str) -> None:
+        """Remove a live symlink tree for a generation.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :return: None.
+        :rtype: None
+        """
+
+        self.remove_live_path(self.live_generation_dir(generation_id))
+        self.remove_stale_live_current()
+
+    def remove_stale_live_current(self) -> None:
+        """Remove live/current when it points at a missing generation.
+
+        :return: None.
+        :rtype: None
+        """
+
+        current_path = self.config.live_dir / "current"
+        if current_path.is_symlink() and not current_path.exists():
+            current_path.unlink()
+
+    def remove_live_path(self, path: Path) -> None:
+        """Remove a live path without following symlinked directories.
+
+        :param path: Path to remove.
+        :type path: Path
+        :return: None.
+        :rtype: None
+        """
+
+        if path.is_symlink() or path.is_file():
+            path.unlink(missing_ok=True)
+        elif path.is_dir():
+            shutil.rmtree(path)
+
+    def live_generation_dir(self, generation_id: str) -> Path:
+        """Return the live directory for a generation.
+
+        :param generation_id: Generation ID.
+        :type generation_id: str
+        :return: Live generation directory.
+        :rtype: Path
+        """
+
+        return self.config.live_dir / generation_id
 
     def active_generation_id(self) -> str | None:
         """Return active generation ID if present.

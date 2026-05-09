@@ -62,6 +62,7 @@ class ManagerConfig:
     state_dir: Path = Path("/var/lib/shaken")
     work_dir: Path = Path("/var/lib/shaken/work")
     archive_dir: Path = Path("/var/lib/shaken/archive")
+    live_dir: Path = Path("/var/lib/shaken/live")
     failed_dir: Path = Path("/var/lib/shaken/failed")
     account_dir: Path = Path("/var/lib/shaken/account")
     active_manifest_path: Path = Path("/var/lib/shaken/active.json")
@@ -212,6 +213,33 @@ class ManagerConfig:
             ),
             allow_production_force_renew=bool(
                 data.get("allow_production_force_renew", False)
+            ),
+            state_dir=Path(string_value(data, "state_dir", "/var/lib/shaken")),
+            work_dir=Path(string_value(data, "work_dir", "/var/lib/shaken/work")),
+            archive_dir=Path(
+                string_value(data, "archive_dir", "/var/lib/shaken/archive")
+            ),
+            live_dir=Path(string_value(data, "live_dir", "/var/lib/shaken/live")),
+            failed_dir=Path(
+                string_value(data, "failed_dir", "/var/lib/shaken/failed")
+            ),
+            account_dir=Path(
+                string_value(data, "account_dir", "/var/lib/shaken/account")
+            ),
+            active_manifest_path=Path(
+                string_value(
+                    data, "active_manifest_path", "/var/lib/shaken/active.json"
+                )
+            ),
+            last_attempt_path=Path(
+                string_value(
+                    data, "last_attempt_path", "/var/lib/shaken/last-attempt.json"
+                )
+            ),
+            lock_path=Path(
+                string_value(
+                    data, "lock_path", "/var/lib/shaken/shaken-cert-manager.lock"
+                )
             ),
             raw=data,
         )
