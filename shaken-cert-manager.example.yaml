@@ -43,7 +43,7 @@
 # shaken_subject_organizational_unit: VoIP
 
 # Strategy for generating certificate subject CN values when no CN template is set.
-# Possible values: unique_per_generation, conservative_cn_unique_o.
+# Possible values: unique_per_generation, stable_common_name.
 # subject_strategy: unique_per_generation
 
 # Python format template for the subject commonName. See docs/subject-templates.md.

@@ -1513,18 +1513,18 @@ class ShakenCertManager:
         :rtype: ShakenSubject
         """
 
+        organization = self.config.shaken_subject_organization
         template_values = {
             "generation_id": generation_id,
             "server_id": self.config.server_id,
             "stipa_spc": self.config.stipa_spc,
-            "organization": self.config.shaken_subject_organization,
+            "organization": organization,
         }
-        organization = self.config.shaken_subject_organization
         if self.config.shaken_subject_common_name_template:
             common_name = render_subject_template(
                 self.config.shaken_subject_common_name_template, template_values
             )
-        elif self.config.subject_strategy == "conservative_cn_unique_o":
+        elif self.config.subject_strategy == "stable_common_name":
             common_name = f"SHAKEN {self.config.stipa_spc}"
         else:
             common_name = f"SHAKEN {self.config.stipa_spc} {self.config.server_id} {generation_id}"

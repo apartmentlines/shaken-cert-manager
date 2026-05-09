@@ -98,7 +98,7 @@ class ManagerConfig:
 
     @classmethod
     def load(cls, path: Path) -> ManagerConfig:
-        """Load configuration from a root-only YAML file.
+        """Load configuration from a private YAML file.
 
         :param path: Configuration path.
         :type path: Path
@@ -111,7 +111,9 @@ class ManagerConfig:
             raise ConfigError(f"Configuration file is missing: {path}")
         mode = path.stat().st_mode & 0o777
         if mode & 0o077:
-            raise ConfigError(f"Configuration file must be root-only: {path}")
+            raise ConfigError(
+                f"Configuration file must not be group/world accessible: {path}"
+            )
         try:
             data = yaml.safe_load(path.read_text()) or {}
         except yaml.YAMLError as exc:
@@ -264,7 +266,11 @@ class ManagerConfig:
         if not self.server_id:
             raise ConfigError("server_id is required")
         if self.shaken_subject_country != "US":
-            raise ConfigError("shaken_subject_country must be US")
+            raise ConfigError("shaken_subject_country must be US for Peeringhub")
+        if self.subject_strategy not in {"unique_per_generation", "stable_common_name"}:
+            raise ConfigError(
+                "subject_strategy must be unique_per_generation or stable_common_name"
+            )
         if self.enabled:
             required_fields = {
                 "stipa_spc": self.stipa_spc,

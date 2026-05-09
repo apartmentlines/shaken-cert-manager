@@ -9,6 +9,9 @@ This is an advanced setting. The default `unique_per_generation` behavior is the
 recommended operator path because it avoids repeated issuance with the same
 subject name.
 
+`subject_strategy: stable_common_name` uses `SHAKEN {stipa_spc}` as the common
+name when no explicit template is configured.
+
 ## Settings
 
 ```yaml

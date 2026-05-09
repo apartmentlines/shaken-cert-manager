@@ -31,9 +31,59 @@ class FileLock:
         :rtype: FileLock
         """
 
-        self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        self.ensure_lock_directory()
         LOGGER.debug("Acquiring manager lock: path=%s", self.path)
-        descriptor = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        descriptor = self.open_lock_file()
+        self.acquire_descriptor_lock(descriptor)
+        self.metadata = f"pid={os.getpid()} started_at={now_utc()}\n"
+        try:
+            self.write_lock_metadata(descriptor)
+        except LockError:
+            os.close(descriptor)
+            raise
+        self.file_descriptor = descriptor
+        LOGGER.debug("Manager lock acquired: path=%s", self.path)
+        return self
+
+    def ensure_lock_directory(self) -> None:
+        """Create the lock directory if needed.
+
+        :return: None.
+        :rtype: None
+        :raises LockError: If the lock directory cannot be created.
+        """
+
+        try:
+            self.path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            message = f"Unable to create manager lock directory {self.path.parent}"
+            raise LockError(f"{message}: {exc}") from exc
+
+    def open_lock_file(self) -> int:
+        """Open the lock file.
+
+        :return: Open file descriptor.
+        :rtype: int
+        :raises LockError: If the lock file cannot be opened.
+        """
+
+        try:
+            return os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+        except OSError as exc:
+            raise LockError(
+                f"Unable to open manager lock file {self.path}: {exc}"
+            ) from exc
+
+    def acquire_descriptor_lock(self, descriptor: int) -> None:
+        """Acquire an exclusive advisory lock on a descriptor.
+
+        :param descriptor: Open lock file descriptor.
+        :type descriptor: int
+        :return: None.
+        :rtype: None
+        :raises LockError: If the lock cannot be acquired.
+        """
+
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
@@ -41,12 +91,29 @@ class FileLock:
             LOGGER.debug("Manager lock is already held: path=%s", self.path)
             os.close(descriptor)
             raise LockError(message) from exc
-        self.file_descriptor = descriptor
-        self.metadata = f"pid={os.getpid()} started_at={now_utc()}\n"
-        os.ftruncate(descriptor, 0)
-        os.write(descriptor, self.metadata.encode("utf-8"))
-        LOGGER.debug("Manager lock acquired: path=%s", self.path)
-        return self
+        except OSError as exc:
+            os.close(descriptor)
+            raise LockError(
+                f"Unable to acquire manager lock {self.path}: {exc}"
+            ) from exc
+
+    def write_lock_metadata(self, descriptor: int) -> None:
+        """Write identifying metadata into the held lock file.
+
+        :param descriptor: Open lock file descriptor.
+        :type descriptor: int
+        :return: None.
+        :rtype: None
+        :raises LockError: If metadata cannot be written.
+        """
+
+        try:
+            os.ftruncate(descriptor, 0)
+            os.write(descriptor, self.metadata.encode("utf-8"))
+        except OSError as exc:
+            raise LockError(
+                f"Unable to write manager lock metadata {self.path}: {exc}"
+            ) from exc
 
     def __exit__(
         self,
