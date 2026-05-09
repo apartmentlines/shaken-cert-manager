@@ -21,7 +21,7 @@ from stir_shaken_acme import (
     TnAuthList,
 )
 from stir_shaken_acme.errors import ShakenValidationError
-from stir_shaken_toolkit.providers.peeringhub import PeeringhubIssuer, PeeringhubProfile
+from stir_shaken_toolkit.providers.peeringhub import PeeringhubIssuer
 
 from shaken_cert_manager.config import ManagerConfig
 from shaken_cert_manager.errors import ManagerError, ValidationError
@@ -841,15 +841,8 @@ class ShakenCertManager:
         :rtype: PeeringhubIssuer
         """
 
-        profile = PeeringhubProfile(
-            environment=self.config.peeringhub_environment,
-            acme_base_url=self.config.acme_url(),
-            stipa_base_url=self.config.stipa_url(),
-            stipa_crl_url=self.config.expected_crl_url(),
-            tn_auth_list_encoding="base64",
-        )
         return PeeringhubIssuer.build(
-            profile=profile,
+            profile=self.config.peeringhub_profile(),
             account_key_path=self.config.acme_account_key_path,
             account_state_path=self.config.acme_account_state_path,
             acme_kid=self.config.acme_kid,

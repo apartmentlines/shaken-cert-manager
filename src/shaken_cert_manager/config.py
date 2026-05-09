@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import yaml
+from stir_shaken_toolkit.providers.peeringhub import PeeringhubProfile
 
 from shaken_cert_manager.errors import ConfigError
 
@@ -26,10 +27,13 @@ ENVIRONMENT_OVERRIDES = {
     "shaken_subject_common_name_template": "SHAKEN_SUBJECT_COMMON_NAME_TEMPLATE",
     "shaken_subject_organization_template": "SHAKEN_SUBJECT_ORGANIZATION_TEMPLATE",
     "subject_strategy": "SHAKEN_SUBJECT_STRATEGY",
+    "acme_base_url_override": "PEERINGHUB_ACME_BASE_URL_OVERRIDE",
     "acme_kid": "ACME_KID",
     "account_dir": "ACME_ACCOUNT_DIR",
     "acme_account_key_path": "ACME_ACCOUNT_KEY_PATH",
     "acme_account_state_path": "ACME_ACCOUNT_STATE_PATH",
+    "stipa_base_url_override": "STIPA_BASE_URL_OVERRIDE",
+    "stipa_crl_url_override": "STIPA_CRL_URL_OVERRIDE",
     "not_before": "SHAKEN_NOT_BEFORE",
     "not_after": "SHAKEN_NOT_AFTER",
     "minimum_certificate_lifetime_days": "SHAKEN_MINIMUM_CERTIFICATE_LIFETIME_DAYS",
@@ -55,7 +59,7 @@ class ManagerConfig:
     subject_strategy: str
     shaken_subject_common_name_template: str
     shaken_subject_organization_template: str
-    acme_base_url: dict[str, str]
+    acme_base_url_override: str | None
     acme_kid: str
     acme_account_key_path: Path
     acme_account_state_path: Path
@@ -63,9 +67,9 @@ class ManagerConfig:
     acme_poll_interval_seconds: int
     acme_poll_timeout_seconds: int
     acme_bad_nonce_retries: int
-    stipa_base_url: dict[str, str]
+    stipa_base_url_override: str | None
     stipa_timeout_seconds: int
-    stipa_crl_url: dict[str, str]
+    stipa_crl_url_override: str | None
     stipa_ca: bool
     certificate_lifetime_mode: str
     not_before: str | None
@@ -168,14 +172,7 @@ class ManagerConfig:
             shaken_subject_organization_template=resolver.string(
                 "shaken_subject_organization_template", ""
             ),
-            acme_base_url=mapping_value(
-                data,
-                "acme_base_url",
-                {
-                    "production": "https://stica.peeringhub.io/acme",
-                    "staging": "https://stica-dev.peeringhub.io/acme",
-                },
-            ),
+            acme_base_url_override=resolver.optional_string("acme_base_url_override"),
             acme_kid=resolver.string(
                 "acme_kid", f"{server_id}-{peeringhub_environment}"
             ),
@@ -195,23 +192,9 @@ class ManagerConfig:
             acme_poll_interval_seconds=int(data.get("acme_poll_interval_seconds", 5)),
             acme_poll_timeout_seconds=int(data.get("acme_poll_timeout_seconds", 180)),
             acme_bad_nonce_retries=int(data.get("acme_bad_nonce_retries", 2)),
-            stipa_base_url=mapping_value(
-                data,
-                "stipa_base_url",
-                {
-                    "production": "https://authenticate-api.iconectiv.com",
-                    "staging": "https://authenticate-api-stg.iconectiv.com",
-                },
-            ),
+            stipa_base_url_override=resolver.optional_string("stipa_base_url_override"),
             stipa_timeout_seconds=int(data.get("stipa_timeout_seconds", 30)),
-            stipa_crl_url=mapping_value(
-                data,
-                "stipa_crl_url",
-                {
-                    "production": "https://authenticate-api.iconectiv.com/download/v1/crl",
-                    "staging": "https://authenticate-api-stg.iconectiv.com/download/v1/crl",
-                },
-            ),
+            stipa_crl_url_override=resolver.optional_string("stipa_crl_url_override"),
             stipa_ca=bool(data.get("stipa_ca", False)),
             certificate_lifetime_mode=string_value(
                 data, "certificate_lifetime_mode", "peeringhub_default"
@@ -309,15 +292,21 @@ class ManagerConfig:
                 raise ConfigError(
                     f"Missing required enabled configuration fields: {', '.join(missing)}"
                 )
-        for url_map_name, url_map in {
-            "acme_base_url": self.acme_base_url,
-            "stipa_base_url": self.stipa_base_url,
-            "stipa_crl_url": self.stipa_crl_url,
-        }.items():
-            if self.peeringhub_environment not in url_map:
-                raise ConfigError(
-                    f"{url_map_name} missing {self.peeringhub_environment}"
-                )
+    def peeringhub_profile(self) -> PeeringhubProfile:
+        """Return the configured Peeringhub provider profile.
+
+        :return: Peeringhub provider profile.
+        :rtype: PeeringhubProfile
+        """
+
+        defaults = PeeringhubProfile.for_environment(self.peeringhub_environment)
+        return PeeringhubProfile(
+            environment=defaults.environment,
+            acme_base_url=self.acme_base_url_override or defaults.acme_base_url,
+            stipa_base_url=self.stipa_base_url_override or defaults.stipa_base_url,
+            stipa_crl_url=self.stipa_crl_url_override or defaults.stipa_crl_url,
+            tn_auth_list_encoding=defaults.tn_auth_list_encoding,
+        )
 
     def acme_url(self) -> str:
         """Return the configured ACME URL for this Peeringhub environment.
@@ -326,7 +315,7 @@ class ManagerConfig:
         :rtype: str
         """
 
-        return self.acme_base_url[self.peeringhub_environment]
+        return self.peeringhub_profile().acme_base_url
 
     def stipa_url(self) -> str:
         """Return the configured STI-PA URL for this Peeringhub environment.
@@ -335,7 +324,7 @@ class ManagerConfig:
         :rtype: str
         """
 
-        return self.stipa_base_url[self.peeringhub_environment]
+        return self.peeringhub_profile().stipa_base_url
 
     def expected_crl_url(self) -> str:
         """Return the configured STI-PA CRL URL for this Peeringhub environment.
@@ -344,7 +333,7 @@ class ManagerConfig:
         :rtype: str
         """
 
-        return self.stipa_crl_url[self.peeringhub_environment]
+        return self.peeringhub_profile().stipa_crl_url
 
 
 def string_value(data: dict[str, Any], key: str, default: str) -> str:
@@ -464,24 +453,3 @@ class ConfigValueResolver:
         """
 
         return value is None or value == ""
-
-
-def mapping_value(
-    data: dict[str, Any], key: str, default: dict[str, str]
-) -> dict[str, str]:
-    """Return a string mapping config value.
-
-    :param data: Config mapping.
-    :type data: dict[str, Any]
-    :param key: Config key.
-    :type key: str
-    :param default: Default mapping.
-    :type default: dict[str, str]
-    :return: Config mapping.
-    :rtype: dict[str, str]
-    """
-
-    value = data.get(key, default)
-    if not isinstance(value, dict):
-        raise ConfigError(f"{key} must be a mapping")
-    return {str(map_key): str(map_value) for map_key, map_value in value.items()}
