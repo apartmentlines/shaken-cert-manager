@@ -52,7 +52,7 @@ Identity and environment:
 | Config key | Environment variable | Notes |
 | --- | --- | --- |
 | `enabled` | | Enables or disables manager work. |
-| `server_id` | `SHAKEN_SERVER_ID` | Used in generation IDs and default subjects. |
+| `server_id` | `SHAKEN_SERVER_ID` | Identifies this manager instance in manifests, hooks, status, and logs. |
 | `peeringhub_environment` | `PEERINGHUB_ENVIRONMENT` | `staging` or `production`. |
 | `stipa_spc` | `STIPA_SPC` | Service provider code in TNAuthList. |
 | `stipa_sp_id` | `STIPA_SP_ID` | STI-PA `STI Participant ID` value; defaults to `stipa_spc`. |

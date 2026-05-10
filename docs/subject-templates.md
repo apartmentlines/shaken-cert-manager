@@ -42,14 +42,14 @@ Peeringhub requires the common name to contain a `SHAKEN <SPC>` string. For
 example, if your SPC is `818H`, the rendered common name must include
 `SHAKEN 818H`.
 
-Recommended pattern:
+Default pattern:
 
 ```yaml
-shaken_subject_common_name_template: "SHAKEN {stipa_spc} {server_id} {generation_id}"
+shaken_subject_common_name_template: "SHAKEN {stipa_spc} {generation_id}"
 ```
 
 This keeps the Peeringhub-required prefix and also makes each certificate
-subject unique.
+subject unique without adding instance identity to the X.509 common name.
 
 Stable common name pattern:
 
@@ -71,12 +71,14 @@ shaken_subject_organization: Example Company
 shaken_subject_common_name_template: "SHAKEN {stipa_spc} {server_id} {generation_id}"
 ```
 
-For a generation ID of `example-server-20260509T153000Z-a1b2c3d4e5`, this
+For a generation ID of `20260509T153000Z-a1b2c3d4e5`, this
 renders roughly as:
 
 ```text
-CN=SHAKEN 818H example-server example-server-20260509T153000Z-a1b2c3d4e5
+CN=SHAKEN 818H example-server 20260509T153000Z-a1b2c3d4e5
 O=Example Company
 ```
 
 The exact generation ID is created by `shaken-cert-manager` during issuance.
+
+**IMPORTANT NOTE:** The CN field of a certification has a maximum value of 64 characters.

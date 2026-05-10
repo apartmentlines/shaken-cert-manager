@@ -51,7 +51,7 @@ shaken-cert-manager --config shaken-cert-manager.yaml force-renew --skip-confirm
 Each issuance creates a unique generation ID such as:
 
 ```text
-voice1-20260509T194831Z-888b6a872c
+20260509T194831Z-888b6a872c
 ```
 
 The manager:

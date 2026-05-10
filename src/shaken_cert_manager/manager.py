@@ -1330,7 +1330,7 @@ class ShakenCertManager:
         """
 
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        generation_id = f"{self.config.server_id}-{timestamp}-{secrets.token_hex(5)}"
+        generation_id = f"{timestamp}-{secrets.token_hex(5)}"
         LOGGER.debug("Generated certificate generation id: %s", generation_id)
         return generation_id
 
@@ -1527,7 +1527,7 @@ class ShakenCertManager:
         elif self.config.subject_strategy == "stable_common_name":
             common_name = f"SHAKEN {self.config.stipa_spc}"
         else:
-            common_name = f"SHAKEN {self.config.stipa_spc} {self.config.server_id} {generation_id}"
+            common_name = f"SHAKEN {self.config.stipa_spc} {generation_id}"
         subject = ShakenSubject(
             country=self.config.shaken_subject_country,
             state=self.config.shaken_subject_state,
