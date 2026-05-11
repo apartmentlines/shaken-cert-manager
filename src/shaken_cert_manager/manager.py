@@ -111,23 +111,29 @@ class ShakenCertManager:
                 )
                 return 0
             self.prune_live_links()
-            result = StatusChecker(self.config).check()
-            if result.code in {OK, WARNING}:
+            if self.config.active_manifest_path.exists():
+                result = StatusChecker(self.config).check()
+                if result.code in {OK, WARNING}:
+                    LOGGER.info(
+                        "Initial issuance skipped: active certificate already exists"
+                    )
+                    LOGGER.debug(
+                        "Issue-initial status result: code=%s summary=%s",
+                        result.code,
+                        result.summary,
+                    )
+                    self.write_last_attempt(
+                        "issue-initial",
+                        "no_renewal_needed",
+                        "active certificate already exists",
+                        active_generation_unchanged=True,
+                    )
+                    return 0
+            else:
                 LOGGER.info(
-                    "Initial issuance skipped: active certificate already exists"
+                    "Initial issuance proceeding: no active manifest exists at %s",
+                    self.config.active_manifest_path,
                 )
-                LOGGER.debug(
-                    "Issue-initial status result: code=%s summary=%s",
-                    result.code,
-                    result.summary,
-                )
-                self.write_last_attempt(
-                    "issue-initial",
-                    "no_renewal_needed",
-                    "active certificate already exists",
-                    active_generation_unchanged=True,
-                )
-                return 0
             self.issue_certificate("issue-initial", force=True)
             LOGGER.info("Issue-initial command completed")
             return 0

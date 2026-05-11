@@ -119,6 +119,18 @@ class StatusChecker:
                 result.summary,
             )
             return result
+        if not self.config.active_manifest_path.exists():
+            result = StatusResult(
+                CRITICAL,
+                "no active certificate exists",
+                base_fields,
+            )
+            LOGGER.debug(
+                "Status check completed: code=%s summary=%s",
+                result.code,
+                result.summary,
+            )
+            return result
         manifest: dict[str, Any] = {}
         generation_id: str | None = None
         live_current_generation_id: str | None = None
