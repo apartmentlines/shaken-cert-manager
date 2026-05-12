@@ -111,17 +111,14 @@
 # Leave empty for the toolkit default for peeringhub_environment.
 # stipa_crl_url_override:
 
-# Controls certificate validity dates requested from ACME.
-# Supported values:
-# - peeringhub_default: use Peeringhub/toolkit default validity dates.
-# - explicit: request the configured not_before and not_after timestamps.
-# certificate_lifetime_mode: peeringhub_default
-
-# Requested certificate notBefore timestamp when certificate_lifetime_mode is explicit.
+# Optional requested certificate notBefore timestamp.
+# Leave unset to use the Peeringhub/toolkit default start time.
 # Use the timestamp format accepted by stir-shaken-toolkit/Peeringhub ACME.
 # not_before:
 
-# Requested certificate notAfter timestamp when certificate_lifetime_mode is explicit.
+# Optional requested certificate notAfter timestamp.
+# Set this to request a shorter or longer certificate validity period.
+# Leave unset to use the Peeringhub/toolkit default expiration time.
 # Use the timestamp format accepted by stir-shaken-toolkit/Peeringhub ACME.
 # not_after:
 
@@ -131,8 +128,9 @@
 # Days before certificate expiration when status should report WARNING.
 # warning_days: 52
 
-# Minimum acceptable issued certificate lifetime in days.
-# Certificates at or below this threshold are treated as unusable for manager status.
+# Minimum acceptable issued certificate lifetime in days. This does not request
+# the certificate length; it controls issuance validation and CRITICAL status.
+# Lower this for intentionally short-lived certificates, such as one-day tests.
 # minimum_certificate_lifetime_days: 21
 
 # Days after expiration to keep archived certificate generations before cleanup.
@@ -155,10 +153,6 @@
 
 # Maximum seconds to allow the deploy hook to run.
 # deploy_hook_timeout_seconds: 60
-
-# Writes additional diagnostics and artifacts useful for failed issuance investigation.
-# Possible values: true, false.
-# write_debug_artifacts: false
 
 # Keeps failed transaction directories for later inspection.
 # Possible values: true, false.

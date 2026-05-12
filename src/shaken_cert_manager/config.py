@@ -70,7 +70,6 @@ class ManagerConfig:
     stipa_base_url_override: str | None
     stipa_timeout_seconds: int | None
     stipa_crl_url_override: str | None
-    certificate_lifetime_mode: str
     not_before: str | None
     not_after: str | None
     renew_before_days: int
@@ -81,7 +80,6 @@ class ManagerConfig:
     pre_activate_hook_timeout_seconds: int
     deploy_hook: str
     deploy_hook_timeout_seconds: int
-    write_debug_artifacts: bool
     retain_failed_transactions: bool
     max_failed_transactions_retained: int
     include_crl_distribution_points: bool
@@ -194,9 +192,6 @@ class ManagerConfig:
             stipa_base_url_override=resolver.optional_string("stipa_base_url_override"),
             stipa_timeout_seconds=resolver.optional_integer("stipa_timeout_seconds"),
             stipa_crl_url_override=resolver.optional_string("stipa_crl_url_override"),
-            certificate_lifetime_mode=string_value(
-                data, "certificate_lifetime_mode", "peeringhub_default"
-            ),
             not_before=resolver.optional_string("not_before"),
             not_after=resolver.optional_string("not_after"),
             renew_before_days=int(data.get("renew_before_days", 45)),
@@ -215,7 +210,6 @@ class ManagerConfig:
             deploy_hook_timeout_seconds=int(
                 data.get("deploy_hook_timeout_seconds", 60)
             ),
-            write_debug_artifacts=bool(data.get("write_debug_artifacts", False)),
             retain_failed_transactions=bool(
                 data.get("retain_failed_transactions", True)
             ),

@@ -69,6 +69,11 @@ Run cleanup periodically:
 shaken-cert-manager --config shaken-cert-manager.yaml cleanup
 ```
 
+## Short-Lived Certificates
+
+See [Custom Certificate Length](docs/configuration.md#custom-certificate-length)
+for an example and related issuance settings.
+
 ## Commands
 
 - `issue-initial`: issue a certificate only when no active usable certificate

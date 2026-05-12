@@ -28,11 +28,14 @@ environment, subject fields, and ACME account paths.
 Environment values override YAML when the environment variable is non-empty.
 Blank YAML values are treated as unset for required values and defaults.
 
-## Required Enabled Settings
+## Required Settings
 
-When `enabled: true`, the manager requires:
+The manager always requires:
 
 - `server_id`
+
+When `enabled: true`, the manager also requires:
+
 - `stipa_spc`
 - `stipa_sp_id`, defaulting to `stipa_spc`
 - `stipa_user_id`
@@ -61,15 +64,15 @@ Identity and environment:
 
 Subject fields:
 
-| Config key | Environment variable |
-| --- | --- |
-| `shaken_subject_country` | `SHAKEN_SUBJECT_COUNTRY` |
-| `shaken_subject_state` | `SHAKEN_SUBJECT_STATE` |
-| `shaken_subject_locality` | `SHAKEN_SUBJECT_LOCALITY` |
-| `shaken_subject_organization` | `SHAKEN_SUBJECT_ORGANIZATION` |
-| `shaken_subject_organizational_unit` | `SHAKEN_SUBJECT_ORGANIZATIONAL_UNIT` |
-| `subject_strategy` | `SHAKEN_SUBJECT_STRATEGY` |
-| `shaken_subject_common_name_template` | `SHAKEN_SUBJECT_COMMON_NAME_TEMPLATE` |
+| Config key | Environment variable | Notes |
+| --- | --- | --- |
+| `shaken_subject_country` | `SHAKEN_SUBJECT_COUNTRY` | Certificate subject country; Peeringhub requires `US`. |
+| `shaken_subject_state` | `SHAKEN_SUBJECT_STATE` | Certificate subject state. |
+| `shaken_subject_locality` | `SHAKEN_SUBJECT_LOCALITY` | Certificate subject city/locality. |
+| `shaken_subject_organization` | `SHAKEN_SUBJECT_ORGANIZATION` | Certificate subject organization. |
+| `shaken_subject_organizational_unit` | `SHAKEN_SUBJECT_ORGANIZATIONAL_UNIT` | Certificate subject OU; defaults to `VoIP`. |
+| `subject_strategy` | `SHAKEN_SUBJECT_STRATEGY` | Generated CN style when no CN template is set: `unique_per_generation` or `stable_common_name`. |
+| `shaken_subject_common_name_template` | `SHAKEN_SUBJECT_COMMON_NAME_TEMPLATE` | Optional CN template; overrides `subject_strategy`. |
 
 See [Subject Templates](subject-templates.md) before overriding the generated
 common name.
@@ -82,9 +85,9 @@ Peeringhub and ACME:
 | `account_dir` | `ACME_ACCOUNT_DIR` | Defaults under `state_dir`. |
 | `acme_account_key_path` | `ACME_ACCOUNT_KEY_PATH` | Durable private key; must exist before issuance. |
 | `acme_account_state_path` | `ACME_ACCOUNT_STATE_PATH` | Recoverable account cache. |
-| `acme_base_url_override` | `PEERINGHUB_ACME_BASE_URL_OVERRIDE` | Rare endpoint override. |
-| `stipa_base_url_override` | `STIPA_BASE_URL_OVERRIDE` | Rare endpoint override. |
-| `stipa_crl_url_override` | `STIPA_CRL_URL_OVERRIDE` | Rare CRL expectation override. |
+| `acme_base_url_override` | `PEERINGHUB_ACME_BASE_URL_OVERRIDE` | Developer override for ACME endpoint tests. |
+| `stipa_base_url_override` | `STIPA_BASE_URL_OVERRIDE` | Developer override for STI-PA endpoint tests. |
+| `stipa_crl_url_override` | `STIPA_CRL_URL_OVERRIDE` | Developer override for expected STI-PA CRL URL. |
 
 Operational policy:
 
@@ -92,21 +95,24 @@ Operational policy:
 | --- | --- | --- |
 | `renew_before_days` | `45` | `renew` issues a replacement at or inside this window. |
 | `warning_days` | `52` | `status` reports WARNING at or inside this window. |
-| `minimum_certificate_lifetime_days` | `21` | Status CRITICAL threshold. |
+| `minimum_certificate_lifetime_days` | `21` | Issuance validation floor and status CRITICAL threshold. |
 | `retention_days_after_expiry` | `30` | Cleanup retention for expired inactive archives. |
 
 State paths:
 
-| Config key | Default |
-| --- | --- |
-| `state_dir` | `/var/lib/shaken` |
-| `work_dir` | `[state_dir]/work` |
-| `archive_dir` | `[state_dir]/archive` |
-| `live_dir` | `[state_dir]/live` |
-| `failed_dir` | `[state_dir]/failed` |
-| `active_manifest_path` | `[state_dir]/active.json` |
-| `last_attempt_path` | `[state_dir]/last-attempt.json` |
-| `lock_path` | `[state_dir]/shaken-cert-manager.lock` |
+These are manager-owned paths. Change them mainly for packaging, containers, or
+migration.
+
+| Config key | Default | Notes |
+| --- | --- | --- |
+| `state_dir` | `/var/lib/shaken` | Base directory for manager state. |
+| `work_dir` | `[state_dir]/work` | Temporary issuance transactions. |
+| `archive_dir` | `[state_dir]/archive` | Completed certificate generations. |
+| `live_dir` | `[state_dir]/live` | Live symlinks, including `current`. |
+| `failed_dir` | `[state_dir]/failed` | Retained failed issuance diagnostics. |
+| `active_manifest_path` | `[state_dir]/active.json` | Active generation manifest file. |
+| `last_attempt_path` | `[state_dir]/last-attempt.json` | Last command result file. |
+| `lock_path` | `[state_dir]/shaken-cert-manager.lock` | Lock file for serializing commands. |
 
 Hooks and diagnostics:
 
@@ -118,7 +124,6 @@ Hooks and diagnostics:
 | `deploy_hook_timeout_seconds` | `60` | Timeout for deploy hook. |
 | `retain_failed_transactions` | `true` | Keep failure diagnostics under `failed/`. |
 | `max_failed_transactions_retained` | `10` | Failed transaction retention count. |
-| `write_debug_artifacts` | `false` | Keep extra diagnostics where supported. |
 
 See [Lifecycle Hooks](hooks.md) for hook timing and environment variables.
 
@@ -126,15 +131,35 @@ Advanced issuance controls:
 
 | Config key | Notes |
 | --- | --- |
-| `certificate_lifetime_mode` | Certificate validity request mode. Supported values are `peeringhub_default` and `explicit`; defaults to `peeringhub_default`. |
-| `not_before` | Requested certificate start when `certificate_lifetime_mode` is `explicit`. |
-| `not_after` | Requested certificate end when `certificate_lifetime_mode` is `explicit`. |
-| `acme_timeout_seconds` | Optional ACME HTTP timeout. |
-| `acme_poll_interval_seconds` | Optional ACME order polling interval. |
-| `acme_poll_timeout_seconds` | Optional ACME order polling timeout. |
-| `acme_bad_nonce_retries` | Optional ACME badNonce retry count. |
-| `stipa_timeout_seconds` | Optional STI-PA HTTP timeout. |
+| `not_before` | Optional requested certificate start timestamp. |
+| `not_after` | Optional requested certificate end timestamp. |
+| `acme_timeout_seconds` | Developer tuning for ACME HTTP timeout. |
+| `acme_poll_interval_seconds` | Developer tuning for ACME order polling interval. |
+| `acme_poll_timeout_seconds` | Developer tuning for ACME order polling and token lifetime checks. |
+| `acme_bad_nonce_retries` | Developer tuning for ACME badNonce retries. |
+| `stipa_timeout_seconds` | Developer tuning for STI-PA HTTP timeout. |
 | `include_crl_distribution_points` | Leave disabled unless your CA workflow requires CSR CRL distribution points. |
+
+## Custom Certificate Length
+
+Leave `not_before` and `not_after` unset to use the Peeringhub/toolkit default
+certificate validity. To request a short-lived certificate, set `not_after` to
+the desired RFC 3339 expiration timestamp accepted by Peeringhub ACME.
+
+Here's how to create a short-lived certificate that expires at midnight UTC
+after May 12, 2026.
+
+```yaml
+# Assuming today was 2026-05-12...
+not_after: 2026-05-13T00:00:00Z
+# minimum_certificate_lifetime_days does not request the certificate length; it
+# is the manager's threshold to accept the newly created certificate as valid,
+# so it still needs to be lower than the length of the certificate being
+# created. For a one-day certificate, use 0.
+minimum_certificate_lifetime_days: 0
+```
+
+See the advanced issuance controls above for other optional issuance settings.
 
 ## Account Key Requirement
 
