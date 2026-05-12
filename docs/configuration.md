@@ -126,9 +126,9 @@ Advanced issuance controls:
 
 | Config key | Notes |
 | --- | --- |
-| `certificate_lifetime_mode` | Use Peeringhub defaults unless explicit dates are required. |
-| `not_before` | Requested certificate start when explicit lifetime mode is used. |
-| `not_after` | Requested certificate end when explicit lifetime mode is used. |
+| `certificate_lifetime_mode` | Certificate validity request mode. Supported values are `peeringhub_default` and `explicit`; defaults to `peeringhub_default`. |
+| `not_before` | Requested certificate start when `certificate_lifetime_mode` is `explicit`. |
+| `not_after` | Requested certificate end when `certificate_lifetime_mode` is `explicit`. |
 | `acme_timeout_seconds` | Optional ACME HTTP timeout. |
 | `acme_poll_interval_seconds` | Optional ACME order polling interval. |
 | `acme_poll_timeout_seconds` | Optional ACME order polling timeout. |

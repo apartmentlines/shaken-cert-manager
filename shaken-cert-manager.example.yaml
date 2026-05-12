@@ -112,14 +112,16 @@
 # stipa_crl_url_override:
 
 # Controls certificate validity dates requested from ACME.
-# Possible values: peeringhub_default, explicit.
+# Supported values:
+# - peeringhub_default: use Peeringhub/toolkit default validity dates.
+# - explicit: request the configured not_before and not_after timestamps.
 # certificate_lifetime_mode: peeringhub_default
 
-# Requested certificate notBefore timestamp when certificate_lifetime_mode uses explicit dates.
+# Requested certificate notBefore timestamp when certificate_lifetime_mode is explicit.
 # Use the timestamp format accepted by stir-shaken-toolkit/Peeringhub ACME.
 # not_before:
 
-# Requested certificate notAfter timestamp when certificate_lifetime_mode uses explicit dates.
+# Requested certificate notAfter timestamp when certificate_lifetime_mode is explicit.
 # Use the timestamp format accepted by stir-shaken-toolkit/Peeringhub ACME.
 # not_after:
 
