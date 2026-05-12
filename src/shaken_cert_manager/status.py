@@ -150,7 +150,9 @@ class StatusChecker:
                 certificate_path.read_bytes()
             )
             private_key = self.certificates.load_certificate_key(key_path)
-            self.certificates.require_key_match(certificate, private_key)
+            self.certificates.require_certificate_private_key_match(
+                certificate, private_key
+            )
             days_remaining = (certificate.not_valid_after_utc - datetime.now(UTC)).days
             live_current_generation_id = self.live_current_generation_id()
             fields = {
