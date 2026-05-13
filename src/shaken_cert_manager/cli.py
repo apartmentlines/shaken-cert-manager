@@ -14,6 +14,7 @@ from argcomplete.completers import FilesCompleter
 from shaken_cert_manager.config import ManagerConfig
 from shaken_cert_manager.errors import ManagerError
 from shaken_cert_manager.manager import ShakenCertManager
+from shaken_cert_manager.version import __version__
 
 SUCCESS_EXIT_CODE = 0
 FAILURE_EXIT_CODE = 1
@@ -82,6 +83,12 @@ class ShakenCertManagerCli:
 
         parser = argparse.ArgumentParser(
             description="SHAKEN certificate issuance and renewal manager"
+        )
+        parser.add_argument(
+            "-v",
+            "--version",
+            action="version",
+            version=f"shaken-cert-manager {__version__}",
         )
         self.add_file_argument(
             parser,

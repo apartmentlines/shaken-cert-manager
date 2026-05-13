@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "shaken-cert-manager"
-version = "0.1.0"
+dynamic = ["version"]
 description = "SHAKEN certificate issuance and renewal lifecycle manager (Certbot for SHAKEN Certs)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,3 +28,6 @@ shaken-cert-manager = "shaken_cert_manager.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "shaken_cert_manager.version.__version__"}
