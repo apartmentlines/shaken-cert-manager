@@ -126,12 +126,12 @@
 # renew_before_days: 45
 
 # Days before certificate expiration when status should report WARNING.
-# warning_days: 52
+# warning_days: 30
 
 # Minimum acceptable issued certificate lifetime in days. This does not request
 # the certificate length; it controls issuance validation and CRITICAL status.
 # Lower this for intentionally short-lived certificates, such as one-day tests.
-# minimum_certificate_lifetime_days: 21
+# minimum_certificate_lifetime_days: 14
 
 # Days after expiration to keep archived certificate generations before cleanup.
 # retention_days_after_expiry: 30

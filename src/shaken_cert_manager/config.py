@@ -195,9 +195,9 @@ class ManagerConfig:
             not_before=resolver.optional_string("not_before"),
             not_after=resolver.optional_string("not_after"),
             renew_before_days=int(data.get("renew_before_days", 45)),
-            warning_days=int(data.get("warning_days", 52)),
+            warning_days=int(data.get("warning_days", 30)),
             minimum_certificate_lifetime_days=resolver.integer(
-                "minimum_certificate_lifetime_days", 21
+                "minimum_certificate_lifetime_days", 14
             ),
             retention_days_after_expiry=int(
                 data.get("retention_days_after_expiry", 30)

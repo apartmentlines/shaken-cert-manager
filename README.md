@@ -78,7 +78,7 @@ for an example and related issuance settings.
 
 - `issue-initial`: issue a certificate only when no active usable certificate
   exists.
-- `renew`: issue a replacement only when status and renewal policy require it.
+- `renew`: issue a replacement only when renewal policy requires it.
 - `force-renew`: issue a replacement immediately; use `--skip-confirm` for
   non-interactive runs.
 - `status`: print active certificate health as text, JSON, or Nagios plugin

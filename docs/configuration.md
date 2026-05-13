@@ -94,8 +94,8 @@ Operational policy:
 | Config key | Default | Notes |
 | --- | --- | --- |
 | `renew_before_days` | `45` | `renew` issues a replacement at or inside this window. |
-| `warning_days` | `52` | `status` reports WARNING at or inside this window. |
-| `minimum_certificate_lifetime_days` | `21` | Issuance validation floor and status CRITICAL threshold. |
+| `warning_days` | `30` | `status` reports WARNING at or inside this window. |
+| `minimum_certificate_lifetime_days` | `14` | Issuance validation floor and status CRITICAL threshold. |
 | `retention_days_after_expiry` | `30` | Cleanup retention for expired inactive archives. |
 
 State paths:
@@ -152,12 +152,21 @@ after May 12, 2026.
 ```yaml
 # Assuming today was 2026-05-12...
 not_after: 2026-05-13T00:00:00Z
+# The default renewal window is for normal long-lived certificates. For
+# short-lived certificates, set renewal and monitoring windows explicitly.
+renew_before_days: 0
+warning_days: 0
 # minimum_certificate_lifetime_days does not request the certificate length; it
 # is the manager's threshold to accept the newly created certificate as valid,
 # so it still needs to be lower than the length of the certificate being
 # created. For a one-day certificate, use 0.
 minimum_certificate_lifetime_days: 0
 ```
+
+`days_remaining` is whole-day based, so a certificate with less than 24 hours
+remaining reports `0` days remaining and is inside any `0`-day renewal,
+warning, or critical window. For one-day or shorter certificate lifetimes,
+run `force-renew` deliberately instead of scheduling repeated `renew` runs.
 
 See the advanced issuance controls above for other optional issuance settings.
 

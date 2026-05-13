@@ -203,19 +203,6 @@ class StatusChecker:
                     result.summary,
                 )
                 return result
-            if self.last_attempt_failed_and_due(days_remaining):
-                result = StatusResult(
-                    WARNING,
-                    "last renewal attempt failed while renewal is due",
-                    fields,
-                    perfdata=self.days_remaining_perfdata(days_remaining),
-                )
-                LOGGER.debug(
-                    "Status check completed: code=%s summary=%s",
-                    result.code,
-                    result.summary,
-                )
-                return result
             result = StatusResult(
                 OK,
                 f"certificate valid for {days_remaining} days",
@@ -321,20 +308,6 @@ class StatusChecker:
             + f"{days_remaining};{self.config.warning_days};"
             + f"{self.config.minimum_certificate_lifetime_days};0"
         ]
-
-    def last_attempt_failed_and_due(self, days_remaining: int) -> bool:
-        """Return whether a failed last attempt matters now.
-
-        :param days_remaining: Active certificate days remaining.
-        :type days_remaining: int
-        :return: Whether warning is needed.
-        :rtype: bool
-        """
-
-        return (
-            self.last_attempt_result() == "failed"
-            and days_remaining <= self.config.renew_before_days
-        )
 
     def live_current_generation_id(self) -> str | None:
         """Return the current live generation target.

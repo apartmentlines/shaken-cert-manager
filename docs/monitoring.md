@@ -39,7 +39,7 @@ shaken-cert-manager --config shaken-cert-manager.yaml status --nagios
 Nagios output is intentionally short and avoids sensitive local paths:
 
 ```text
-SHAKEN CERTIFICATE OK: certificate valid for 364 days; generation=20260509T194831Z-888b6a872c; expires=2027-05-09T19:48:39Z | days_remaining=364;52;21;0
+SHAKEN CERTIFICATE OK: certificate valid for 364 days; generation=20260509T194831Z-888b6a872c; expires=2027-05-09T19:48:39Z | days_remaining=364;30;14;0
 ```
 
 The `days_remaining` perfdata is:
@@ -62,8 +62,6 @@ days_remaining=<value>;<warning_days>;<minimum_certificate_lifetime_days>;0
 Status reports WARNING when:
 
 - The active certificate is at or inside `warning_days`.
-- The last renewal attempt failed and the certificate is now inside the renewal
-  window.
 
 Status reports CRITICAL when:
 

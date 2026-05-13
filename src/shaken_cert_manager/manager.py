@@ -266,21 +266,19 @@ class ShakenCertManager:
                 result.summary,
             )
             return True
-        if result.code == WARNING:
-            days_remaining = result.fields.get("days_remaining")
-            required = (
-                isinstance(days_remaining, int)
-                and days_remaining <= self.config.renew_before_days
-            )
-            LOGGER.debug(
-                "Renewal warning decision: required=%s days_remaining=%s "
-                + "renew_before_days=%s summary=%s",
-                required,
-                days_remaining,
-                self.config.renew_before_days,
-                result.summary,
-            )
-            return required
+        days_remaining = result.fields["days_remaining"]
+        required = days_remaining <= self.config.renew_before_days
+        LOGGER.debug(
+            "Renewal window decision: required=%s status_code=%s "
+            + "days_remaining=%s renew_before_days=%s summary=%s",
+            required,
+            result.code,
+            days_remaining,
+            self.config.renew_before_days,
+            result.summary,
+        )
+        if required:
+            return True
         LOGGER.debug(
             "Renewal not required: status_code=%s summary=%s",
             result.code,
