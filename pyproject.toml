@@ -12,7 +12,7 @@ dependencies = [
   "argcomplete>=3",
   "cryptography>=41",
   "PyYAML>=6.0",
-  # "stir-shaken-toolkit",
+  "stir-shaken-toolkit",
 ]
 
 [project.optional-dependencies]
