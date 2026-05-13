@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from stir_shaken_acme import ShakenCertificateManager
+from stir_shaken_acme import CertificateInspector, ShakenCertificateManager
 from stir_shaken_acme.errors import ShakenValidationError
 
 from shaken_cert_manager.config import ManagerConfig
@@ -88,6 +88,7 @@ class StatusChecker:
     def __init__(self, config: ManagerConfig) -> None:
         self.config: ManagerConfig = config
         self.certificates: ShakenCertificateManager = ShakenCertificateManager()
+        self.inspector: CertificateInspector = CertificateInspector()
 
     def check(self) -> StatusResult:
         """Check active certificate status.
@@ -153,13 +154,13 @@ class StatusChecker:
             self.certificates.require_certificate_private_key_match(
                 certificate, private_key
             )
+            inspection = self.inspector.inspect_certificate(certificate).as_dict()
             days_remaining = (certificate.not_valid_after_utc - datetime.now(UTC)).days
             live_current_generation_id = self.live_current_generation_id()
             fields = {
                 **base_fields,
                 "generation_id": generation_id,
-                "serial_number": manifest.get("serial_number"),
-                "not_after": manifest.get("not_after"),
+                **self.certificate_status_fields(inspection),
                 "days_remaining": days_remaining,
                 "active_private_key_path": str(key_path),
                 "leaf_certificate_path": str(certificate_path),
@@ -265,6 +266,32 @@ class StatusChecker:
                 result.summary,
             )
             return result
+
+    def certificate_status_fields(self, inspection: dict[str, Any]) -> dict[str, Any]:
+        """Return status fields derived from the active certificate.
+
+        :param inspection: Certificate inspection data.
+        :type inspection: dict[str, Any]
+        :return: Status fields.
+        :rtype: dict[str, Any]
+        """
+
+        return {
+            "serial_number": inspection.get("serial_number"),
+            "subject": inspection.get("subject_rfc4514"),
+            "issuer": inspection.get("issuer_rfc4514"),
+            "not_before": inspection.get("not_before"),
+            "not_after": inspection.get("not_after"),
+            "fingerprint_sha256": inspection.get("fingerprint_sha256"),
+            "public_key_fingerprint_sha256": inspection.get(
+                "public_key_fingerprint_sha256"
+            ),
+            "subject_key_identifier": inspection.get("subject_key_identifier"),
+            "authority_key_identifier": inspection.get("authority_key_identifier"),
+            "certificate_policy_oids": inspection.get("certificate_policy_oids", []),
+            "crl_distribution_points": inspection.get("crl_distribution_points", []),
+            "tn_auth_list_spc": inspection.get("tn_auth_list_spc"),
+        }
 
     def last_attempt_result(self) -> str | None:
         """Return the last attempt result.

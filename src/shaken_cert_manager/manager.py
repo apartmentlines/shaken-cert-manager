@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from stir_shaken_acme import (
+    CertificateInspector,
     IssuanceValidationError,
     ShakenCertificateManager,
     ShakenCertificatePolicy,
@@ -50,6 +51,7 @@ class ShakenCertManager:
     def __init__(self, config: ManagerConfig) -> None:
         self.config: ManagerConfig = config
         self.certificates: ShakenCertificateManager = ShakenCertificateManager()
+        self.inspector: CertificateInspector = CertificateInspector()
 
     def status(self, nagios: bool = False, json_output: bool = False) -> int:
         """Print manager status.
@@ -391,9 +393,12 @@ class ShakenCertManager:
             )
             if result.certificate_details is None:
                 raise ValidationError("issued certificate details are missing")
+            certificate_inspection = self.inspector.inspect_certificate_bytes(
+                result.leaf_pem.encode("utf-8")
+            ).as_dict()
             manifest = self.build_manifest(
                 generation_id=generation_id,
-                cert_details=result.certificate_details.as_dict(),
+                certificate_inspection=certificate_inspection,
                 tn_auth_list_value=result.tn_auth_list_value,
                 installed_key_path=self.config.acme_account_key_path,
                 chain_archive_path=chain_archive_path,
@@ -877,7 +882,7 @@ class ShakenCertManager:
         :rtype: dict[str, Any]
         """
 
-        cert_details = values["cert_details"]
+        certificate_inspection = values["certificate_inspection"]
         generation_id = str(values["generation_id"])
         subject = self.build_subject(generation_id).to_x509_name().rfc4514_string()
         LOGGER.debug(
@@ -908,12 +913,27 @@ class ShakenCertManager:
             "live_leaf_certificate_path": str(
                 self.live_generation_dir(str(values["generation_id"])) / "leaf.pem"
             ),
-            "serial_number": cert_details["serial_number"],
-            "not_before": cert_details["not_before"],
-            "not_after": cert_details["not_after"],
-            "issuer": cert_details["issuer"],
-            "subject_key_identifier": "",
-            "fingerprint_sha256": cert_details["fingerprint_sha256"],
+            "serial_number": certificate_inspection["serial_number"],
+            "not_before": certificate_inspection["not_before"],
+            "not_after": certificate_inspection["not_after"],
+            "issuer": certificate_inspection["issuer_rfc4514"],
+            "subject_key_identifier": certificate_inspection.get(
+                "subject_key_identifier"
+            ),
+            "authority_key_identifier": certificate_inspection.get(
+                "authority_key_identifier"
+            ),
+            "certificate_policy_oids": certificate_inspection.get(
+                "certificate_policy_oids", []
+            ),
+            "crl_distribution_points": certificate_inspection.get(
+                "crl_distribution_points", []
+            ),
+            "tn_auth_list_spc": certificate_inspection.get("tn_auth_list_spc"),
+            "fingerprint_sha256": certificate_inspection["fingerprint_sha256"],
+            "public_key_fingerprint_sha256": certificate_inspection[
+                "public_key_fingerprint_sha256"
+            ],
             "acme_account_url": values["account_state"].account_url,
             "acme_account_key_fingerprint": values[
                 "account_state"

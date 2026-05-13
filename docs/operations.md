@@ -125,6 +125,13 @@ Inspect the active manifest:
 python -m json.tool /var/lib/shaken/active.json
 ```
 
+Inspect the active certificate contents:
+
+```bash
+stir-shaken-toolkit inspect --certificate /var/lib/shaken/live/current/leaf.pem
+stir-shaken-toolkit inspect --certificate /var/lib/shaken/live/current/certificate-chain.pem --json
+```
+
 ## Cleanup
 
 Run cleanup periodically:

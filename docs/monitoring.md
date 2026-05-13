@@ -26,7 +26,9 @@ JSON output contains:
 - `fields`: structured status fields.
 
 Use JSON for local automation that needs exact values such as `generation_id`,
-`not_after`, `days_remaining`, hook statuses, or `last_attempt_result`.
+`not_after`, `days_remaining`, hook statuses, `last_attempt_result`, parsed
+certificate policies, CRL distribution points, key identifiers, and the
+TNAuthList SPC found in the active certificate.
 
 ## Nagios Status
 
