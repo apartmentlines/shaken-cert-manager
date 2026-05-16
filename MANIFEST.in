@@ -1,0 +1,4 @@
+include README.md LICENSE CHANGELOG.md
+include shaken-cert-manager.example.yaml
+recursive-include docs *.md
+recursive-include examples *

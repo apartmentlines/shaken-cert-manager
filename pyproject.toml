@@ -34,5 +34,8 @@ shaken-cert-manager = "shaken_cert_manager.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.data-files]
+"share/shaken-cert-manager" = ["shaken-cert-manager.example.yaml"]
+
 [tool.setuptools.dynamic]
 version = {attr = "shaken_cert_manager.version.__version__"}
