@@ -5,7 +5,7 @@ also giving operators clear manual commands for inspection and recovery.
 
 ## First Issuance
 
-Before the first certificate, create the Peeringhub ACME account key:
+Before the first certificate, create the PeeringHub ACME account key:
 
 ```bash
 stir-shaken-toolkit peeringhub-account-setup --account-dir /var/lib/shaken/account
@@ -56,7 +56,7 @@ Each issuance creates a unique generation ID such as:
 
 The manager:
 
-1. Issues and validates a certificate through Peeringhub.
+1. Issues and validates a certificate through PeeringHub.
 2. Archives generation artifacts under `archive/<generation_id>/`.
 3. Creates `live/<generation_id>/` symlinks to the archived certificate files.
 4. Runs `pre_activate_hook`, when configured.

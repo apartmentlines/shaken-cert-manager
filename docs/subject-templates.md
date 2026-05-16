@@ -38,7 +38,7 @@ Unknown fields are rejected during issuance.
 
 `shaken_subject_common_name_template` controls the subject `CN` value.
 
-Peeringhub requires the common name to contain a `SHAKEN <SPC>` string. For
+PeeringHub requires the common name to contain a `SHAKEN <SPC>` string. For
 example, if your SPC is `818H`, the rendered common name must include
 `SHAKEN 818H`.
 
@@ -48,7 +48,7 @@ Default pattern:
 shaken_subject_common_name_template: "SHAKEN {stipa_spc} {generation_id}"
 ```
 
-This keeps the Peeringhub-required prefix and also makes each certificate
+This keeps the PeeringHub-required prefix and also makes each certificate
 subject unique without adding instance identity to the X.509 common name.
 
 Stable common name pattern:
@@ -58,7 +58,7 @@ shaken_subject_common_name_template: "SHAKEN {stipa_spc}"
 ```
 
 Use a stable common name only if your CA and operational workflow allow
-reissuing certificates with the same subject name. Peeringhub may reject a new
+reissuing certificates with the same subject name. PeeringHub may reject a new
 certificate when another active certificate already uses the same subject.
 
 ## Example

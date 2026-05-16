@@ -7,7 +7,7 @@ keeps durable archive state, exposes the active certificate through stable live
 links, runs lifecycle hooks, reports monitoring status, and cleans up old
 material.
 
-It currently supports integration with the [Peeringhub.io](https://www.peeringhub.io) STI-CA SHAKEN certificate provider -- an active Peeringhub account is required for valid issuance of certificates.
+It currently supports integration with the [PeeringHub](https://www.peeringhub.io) STI-CA SHAKEN certificate provider -- an active PeeringHub account is required for valid issuance of certificates.
 
 It does not replace your signing service. Your signing service still needs to
 read the private key, publish the active certificate chain at the URL used in
@@ -15,14 +15,19 @@ PASSporT `x5u`, insert the `Identity` header into outbound calls, etc.
 
 ## Install
 
+### Package install
+
+```bash
+pip install shaken-cert-manager
+```
+
+### Development install
+
 From the repository root:
 
 ```bash
-python -m pip install -e .
+pip install -e .[dev]
 ```
-
-`shaken-cert-manager` depends on Peeringhub issuance support from
-`stir-shaken-toolkit`. Install that package in the same environment.
 
 ## Quick Start
 
@@ -33,13 +38,13 @@ cp shaken-cert-manager.example.yaml shaken-cert-manager.yaml
 chmod 600 shaken-cert-manager.yaml
 ```
 
-Fill in the Peeringhub, STI-PA, certificate subject, account, state, and hook
+Fill in the PeeringHub, STI-PA, certificate subject, account, state, and hook
 settings needed for the deployment.
 
 See the [minimal config example](docs/configuration.md#example-minimal-config)
 for the smallest useful shape.
 
-Prepare or provision the Peeringhub ACME account key before issuing:
+Prepare or provision the PeeringHub ACME account key before issuing:
 
 ```bash
 stir-shaken-toolkit peeringhub-account-setup --account-dir /var/lib/shaken/account
@@ -98,8 +103,8 @@ shaken-cert-manager --config shaken-cert-manager.yaml --debug status
 
 The manager owns a state directory, usually `/var/lib/shaken`:
 
-- `account/account.key`: durable Peeringhub ACME account private key.
-- `account/account.json`: recoverable Peeringhub ACME account state cache.
+- `account/account.key`: durable PeeringHub ACME account private key.
+- `account/account.json`: recoverable PeeringHub ACME account state cache.
 - `archive/<generation_id>/`: durable certificate generation artifacts.
 - `live/<generation_id>/`: symlink tree exposing an unexpired generation.
 - `live/current`: symlink to the active live generation.

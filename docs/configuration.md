@@ -22,7 +22,7 @@ For a full commented starting point, use
 ## Value Sources
 
 Most settings are read from YAML. The manager also accepts environment
-overrides for deployment-specific values such as STI-PA credentials, Peeringhub
+overrides for deployment-specific values such as STI-PA credentials, PeeringHub
 environment, subject fields, and ACME account paths.
 
 Environment values override YAML when the environment variable is non-empty.
@@ -66,7 +66,7 @@ Subject fields:
 
 | Config key | Environment variable | Notes |
 | --- | --- | --- |
-| `shaken_subject_country` | `SHAKEN_SUBJECT_COUNTRY` | Certificate subject country; Peeringhub requires `US`. |
+| `shaken_subject_country` | `SHAKEN_SUBJECT_COUNTRY` | Certificate subject country; PeeringHub requires `US`. |
 | `shaken_subject_state` | `SHAKEN_SUBJECT_STATE` | Certificate subject state. |
 | `shaken_subject_locality` | `SHAKEN_SUBJECT_LOCALITY` | Certificate subject city/locality. |
 | `shaken_subject_organization` | `SHAKEN_SUBJECT_ORGANIZATION` | Certificate subject organization. |
@@ -77,11 +77,11 @@ Subject fields:
 See [Subject Templates](subject-templates.md) before overriding the generated
 common name.
 
-Peeringhub and ACME:
+PeeringHub and ACME:
 
 | Config key | Environment variable | Notes |
 | --- | --- | --- |
-| `acme_kid` | `ACME_KID` | Peeringhub-provided account identifier. |
+| `acme_kid` | `ACME_KID` | PeeringHub-provided account identifier. |
 | `account_dir` | `ACME_ACCOUNT_DIR` | Defaults under `state_dir`. |
 | `acme_account_key_path` | `ACME_ACCOUNT_KEY_PATH` | Durable private key; must exist before issuance. |
 | `acme_account_state_path` | `ACME_ACCOUNT_STATE_PATH` | Recoverable account cache. |
@@ -142,9 +142,9 @@ Advanced issuance controls:
 
 ## Custom Certificate Length
 
-Leave `not_before` and `not_after` unset to use the Peeringhub/toolkit default
+Leave `not_before` and `not_after` unset to use the PeeringHub/toolkit default
 certificate validity. To request a short-lived certificate, set `not_after` to
-the desired RFC 3339 expiration timestamp accepted by Peeringhub ACME.
+the desired RFC 3339 expiration timestamp accepted by PeeringHub ACME.
 
 Here's how to create a short-lived certificate that expires at midnight UTC
 after May 12, 2026.
@@ -172,7 +172,7 @@ See the advanced issuance controls above for other optional issuance settings.
 
 ## Account Key Requirement
 
-`acme_account_key_path` must point to the durable Peeringhub ACME account private
+`acme_account_key_path` must point to the durable PeeringHub ACME account private
 key. Create or verify it with `stir-shaken-toolkit`:
 
 ```bash
@@ -180,7 +180,7 @@ stir-shaken-toolkit peeringhub-account-setup --account-dir /var/lib/shaken/accou
 ```
 
 If `acme_account_state_path` is missing, the manager refreshes it from
-Peeringhub before issuance. If the private key is missing, issuance stops.
+PeeringHub before issuance. If the private key is missing, issuance stops.
 
 ## Example Minimal Config
 
