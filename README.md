@@ -1,7 +1,8 @@
 # SHAKEN Cert Manager - Certbot for SHAKEN Certs
 
 `shaken-cert-manager` is an operator-focused lifecycle manager for
-STIR/SHAKEN certificates. It issues certificates through `stir-shaken-toolkit`,
+STIR/SHAKEN certificates. It issues certificates through
+[stir-shaken-toolkit](https://github.com/peeringhub-io/stir-shaken-toolkit),
 keeps durable archive state, exposes the active certificate through stable live
 links, runs lifecycle hooks, reports monitoring status, and cleans up old
 material.
