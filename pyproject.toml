@@ -15,6 +15,11 @@ dependencies = [
   "stir-shaken-toolkit",
 ]
 
+[project.urls]
+Homepage = "https://github.com/peeringhub-io/shaken-cert-manager"
+Repository = "https://github.com/peeringhub-io/shaken-cert-manager"
+Issues = "https://github.com/peeringhub-io/shaken-cert-manager/issues"
+
 [project.optional-dependencies]
 dev = [
     "pytest",
